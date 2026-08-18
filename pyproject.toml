@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "capaudit"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Static analysis linter that flags config fields whose declared type is narrower than what the consuming code actually does with them."
 readme = "README.md"
 license = { text = "Apache-2.0" }

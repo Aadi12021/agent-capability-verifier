@@ -47,6 +47,27 @@ attacker-controlled value ever reaches it.
 See [docs/capability-schema.md](docs/capability-schema.md) for the full capability/sink taxonomy
 and how to declare a schema.
 
+`capaudit` also separately reports **coverage gaps** — config fields a loader reads that its
+schema never declared at all, so no capability check could be performed for them. These don't fail
+a run by default (pass `--strict` to make them fail CI too), but they're printed so a clean run
+can't be mistaken for "every field was checked."
+
+## Quick start
+
+```bash
+pip install -e .
+capaudit examples/clean_loader.py
+# capaudit: no capability mismatches found (1 file(s) checked)
+
+capaudit examples/
+# MISMATCH  examples/vulnerable_loader_1_path.py:30  load_record_index: field 'offset' declared numeric, but reaches file_read via open(...) at line 30
+# MISMATCH  examples/vulnerable_loader_2_template.py:27  render_welcome_message: field 'greeting_name' declared opaque_string, but reaches template_render via Template(...) at line 27
+# MISMATCH  examples/vulnerable_loader_3_subprocess.py:28  run_diagnostics: field 'log_level' declared enum, but reaches subprocess via subprocess.run(...) at line 28
+```
+
+Exit code is `0` for a clean run, `1` if any mismatch is found (or, with `--strict`, if any
+coverage gap is found), `2` for a tool error (bad path, syntax error in the target file).
+
 ## What this tool does NOT do (v1 scope — read this before relying on it)
 
 This is a v1, and its coverage is intentionally narrow. It is **not** a general security scanner
@@ -81,12 +102,15 @@ current contact info) rather than a public exploit writeup.
 
 ## Status
 
-Early development (pre-v0.1). Design and APIs will change. Not yet ready for production use.
+`v0.1.0` — the design described above is implemented end to end (schema, tracer, checker, CLI) and
+covered by tests, but the project is young: APIs may still change, and the scope limitations above
+are real, not boilerplate. Read them before relying on a clean run.
 
 ## Project layout
 
 ```
-src/capaudit/     # the tool itself
+src/capaudit/     # the tool itself: schema.py, tracer.py, checker.py, cli.py
+docs/             # capability schema spec
 examples/         # original toy loaders: vulnerable + clean, for testing and demonstration
 tests/            # test suite
 docker/           # isolated sandbox used to run analysis and tests, no network egress
