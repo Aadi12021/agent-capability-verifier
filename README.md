@@ -44,6 +44,9 @@ into a `Template(...).render()` call, is flagged — regardless of whether anyth
 to be in the config file today. The point is to catch the *capability* mismatch before an
 attacker-controlled value ever reaches it.
 
+See [docs/capability-schema.md](docs/capability-schema.md) for the full capability/sink taxonomy
+and how to declare a schema.
+
 ## What this tool does NOT do (v1 scope — read this before relying on it)
 
 This is a v1, and its coverage is intentionally narrow. It is **not** a general security scanner
