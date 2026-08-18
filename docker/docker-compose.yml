@@ -1,0 +1,11 @@
+services:
+  sandbox:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    network_mode: none
+    read_only: false
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
