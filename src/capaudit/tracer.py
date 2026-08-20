@@ -21,7 +21,8 @@ function or module boundaries.
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 
 from capaudit.schema import Capability, CapabilitySchema, SinkCategory
 
@@ -153,10 +154,10 @@ def _open_sink_category(call: ast.Call) -> SinkCategory:
     return SinkCategory.FILE_READ
 
 
-def _candidate_sink_args(call: ast.Call) -> list[ast.AST]:
+def _candidate_sink_args(call: ast.Call) -> list[ast.expr]:
     """Positional args, expanding any list literal so e.g.
     `subprocess.run([cmd, tainted_var])` checks each element."""
-    exprs: list[ast.AST] = []
+    exprs: list[ast.expr] = []
     for arg in call.args:
         if isinstance(arg, ast.List):
             exprs.extend(arg.elts)
@@ -198,7 +199,9 @@ def _match_sink_hits(
             and func.value.args:
         field = _resolve_field(func.value.args[0], config_param, alias_map)
         if field is not None:
-            category = SinkCategory.FILE_WRITE if func.attr.startswith("write") else SinkCategory.FILE_READ
+            category = (
+                SinkCategory.FILE_WRITE if func.attr.startswith("write") else SinkCategory.FILE_READ
+            )
             hits.append((field, category, f"Path(...).{func.attr}()"))
         return hits
 

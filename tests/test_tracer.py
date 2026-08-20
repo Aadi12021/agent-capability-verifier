@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from capaudit.schema import Capability, SinkCategory
+from capaudit.schema import SinkCategory
 from capaudit.tracer import CapabilityTracer
 
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"

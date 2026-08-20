@@ -13,8 +13,9 @@ built against, so the sink taxonomy lives here rather than being duplicated.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import Enum
-from typing import Callable, TypeVar
+from typing import TypeVar
 
 F = TypeVar("F", bound=Callable)
 

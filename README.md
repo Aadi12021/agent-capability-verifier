@@ -1,5 +1,9 @@
 # agent-capability-verifier
 
+[![CI](https://github.com/Aadi12021/agent-capability-verifier/actions/workflows/ci.yml/badge.svg)](https://github.com/Aadi12021/agent-capability-verifier/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+
 **A defensive static-analysis linter for Python config loaders.** It checks whether a config
 schema's *declared* field types match what the code that consumes those fields can *actually* do —
 and flags the gap.
@@ -96,9 +100,8 @@ static rules," not as a general clean bill of health.
 
 If you find a security issue in a project *because* of output from this tool, follow that
 project's own responsible-disclosure process — this tool does not grant you authorization to test
-systems you don't own or have permission to test. If you find a bug in this tool itself, please
-open an issue (or, for anything sensitive, contact the maintainer directly — see repo settings for
-current contact info) rather than a public exploit writeup.
+systems you don't own or have permission to test. If you find a bug in this tool itself, see
+[SECURITY.md](SECURITY.md) rather than opening a public issue.
 
 ## Status
 
@@ -119,7 +122,8 @@ docker/           # isolated sandbox used to run analysis and tests, no network 
 ## Development
 
 All analysis and tests run inside an isolated Docker sandbox with no network egress — see
-[docker/README.md](docker/README.md).
+[docker/README.md](docker/README.md). See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, the
+lint/type-check/test commands CI runs, and guidelines for adding sinks, capabilities, or examples.
 
 ## License
 
