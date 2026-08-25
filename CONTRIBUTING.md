@@ -13,7 +13,11 @@ git clone https://github.com/Aadi12021/agent-capability-verifier
 cd agent-capability-verifier
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
+pre-commit install
 ```
+
+`pre-commit install` wires up `ruff` and `mypy` to run on `git commit`, so lint/type failures
+surface locally before they hit CI.
 
 ## Before opening a PR
 
