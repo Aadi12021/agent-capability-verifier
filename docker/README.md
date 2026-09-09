@@ -19,8 +19,27 @@ This builds the image and runs the test suite (`pytest`) with no network access.
 against a specific file instead of the test suite:
 
 ```bash
-docker compose -f docker/docker-compose.yml run --rm sandbox capaudit examples/vulnerable_loader_1.py
+docker compose -f docker/docker-compose.yml run --rm sandbox capaudit examples/vulnerable_loader_1_path.py
 ```
+
+## Verification
+
+The isolation properties above were exercised end to end on 2026-09-08 (image built from this
+`docker/` directory, `docker compose ... run --rm sandbox <cmd>` for each check):
+
+| Property | Check | Result |
+| --- | --- | --- |
+| Image builds | `docker compose -f docker/docker-compose.yml build` | editable install of `capaudit` succeeds, image `docker-sandbox` created |
+| Test suite runs inside the container | default `CMD` (`pytest -v`) | `47 passed` |
+| No network egress | `urllib.request.urlopen("http://93.184.216.34", timeout=5)` (raw IP, no DNS) | `URLError: [Errno 101] Network is unreachable` |
+| No DNS resolver | `socket.gethostbyname("example.com")` | `socket.gaierror: [Errno -3] Temporary failure in name resolution` |
+| Non-root | `id` | `uid=1000(sandbox) gid=1000(sandbox)` |
+| All capabilities dropped | `grep Cap /proc/self/status` | `CapInh/CapPrm/CapEff/CapBnd/CapAmb` all `0000000000000000` |
+| No privilege escalation | `grep NoNewPrivs /proc/self/status` | `NoNewPrivs: 1` (seccomp filter also active: `Seccomp: 2`) |
+
+`/workspace` is owned by root (populated by build-time `COPY`) and is not writable by the
+`sandbox` user; `pytest` emits one harmless cache-write warning as a result. Re-run the checks
+above after any change to the `Dockerfile` or `docker-compose.yml`.
 
 ## Why `network_mode: none` instead of an allowlist
 
