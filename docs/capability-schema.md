@@ -80,6 +80,62 @@ def load_dataset_config(config: dict):
 importing or executing the module under analysis — consistent with this being a static linter, not
 a runtime enforcement layer, in v1.
 
+## Joint (compound) capabilities
+
+Some real bugs don't come from any single field — they come from *combining* two or more fields
+that each look inert on their own. A `base_dir` field and a `filename` field might both be
+perfectly reasonable as `OPAQUE_STRING`, yet `open(os.path.join(base_dir, filename))` gives an
+attacker-controlled `filename` (e.g. `"../../../etc/passwd"`) arbitrary file access — a capability
+neither field's individual declaration grants.
+
+`CapabilitySchema` accepts an optional `joint` argument for exactly this: a list of
+`JointCapability` rules, each naming a specific set of fields and the `Capability` their
+combination is allowed to have:
+
+```python
+from capaudit.schema import Capability, CapabilitySchema, JointCapability
+
+SCHEMA = CapabilitySchema(
+    {
+        "base_dir": Capability.OPAQUE_STRING,
+        "filename": Capability.OPAQUE_STRING,
+    },
+    joint=[
+        JointCapability(fields={"base_dir", "filename"}, capability=Capability.FILE_PATH),
+    ],
+)
+```
+
+This declares that `base_dir` and `filename`, *used together*, are allowed to reach whatever
+`Capability.FILE_PATH` allows (`FILE_READ`/`FILE_WRITE`) — reusing the existing `Capability`
+vocabulary rather than inventing a parallel one, since "what sinks can this reach" is the same
+question whether it's asked of one field or a combination. Every field named in a `joint` rule
+must also appear in the schema's own per-field `fields` mapping (checked at construction time via
+`UnknownFieldError`), so coverage-gap detection for those fields is unaffected.
+
+If the tracer (see below) finds a sink call whose argument is built from more than one distinct
+config field, and no `JointCapability` rule names that *exact* combination, the checker reports it
+as a **joint mismatch** — a distinct finding category from the single-field `Mismatch`, because the
+bug isn't attributable to any one field's declaration being wrong.
+
+A schema built without the `joint` argument (i.e. every schema that predates this feature) behaves
+exactly as before — this is purely additive.
+
+### Current matching and detection limits
+
+- **Exact field-set matching only.** A rule for `{"base_dir", "filename"}` does not cover a sink
+  additionally fed by a third field, and does not partially apply to a subset.
+- **The tracer currently recognizes three ways fields combine into one sink argument:** string
+  concatenation (`a + b`), an f-string (`f"{a}/{b}"`), and `os.path.join(...)` — including through
+  one level of simple variable assignment (e.g. `p = os.path.join(a, b); open(p)`). It does not
+  currently recognize `%`-formatting, `str.format()`, `pathlib.Path(...) / ...`, or fields threaded
+  through a helper function across function or module boundaries; those remain false negatives for
+  the same reason single-field flows through such patterns already were.
+- **No reasoning about combinations of more than two fields' worth of matched patterns beyond what
+  those three patterns naturally nest into** — e.g. `f"{a}/{b}/{c}"` is fine (all three fields are
+  collected from the one f-string), but a value built from patterns this tracer doesn't recognize
+  at all won't contribute to the joint set.
+
 ## What's intentionally out of scope for this spec
 
 - **No lattice/ordering between capabilities.** `FILE_PATH`, `TEMPLATE`, `COMMAND`, and
@@ -87,8 +143,9 @@ a runtime enforcement layer, in v1.
   declared `FILE_PATH` is not implicitly allowed to reach `SUBPROCESS`. Each capability's allowed
   sinks are declared explicitly.
 - **No per-field custom sink rules.** All fields sharing a capability share its allowed-sinks set.
-- **No cross-field or whole-config reasoning** (e.g. "field A is only dangerous if field B is
-  also set"). Each field is evaluated independently in v1.
+- **No whole-config reasoning beyond named joint rules** (e.g. "field A is only dangerous if field
+  B is set to a particular value"). Joint capabilities (above) cover fields composing into one sink
+  argument together; they don't reason about conditional relationships between fields' *values*.
 
 These may be revisited in a later version; see the README's scope section for the current status
 of the tracer and checker built on top of this schema.
