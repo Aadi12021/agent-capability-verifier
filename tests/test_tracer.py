@@ -227,6 +227,144 @@ def load(config):
     assert hit.sink == SinkCategory.NETWORK
 
 
+# --- Joint (multi-field) sink hits ---
+
+
+def test_single_field_expression_still_produces_a_plain_sink_hit_not_joint():
+    source = """
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({"path": Capability.NUMERIC})
+
+@SCHEMA.bind
+def load(config):
+    return open(config["path"])
+"""
+    [trace] = _trace_source(source)
+    assert trace.joint_sink_hits == ()
+    [hit] = trace.sink_hits
+    assert hit.field == "path"
+
+
+def test_os_path_join_of_two_fields_is_a_joint_hit():
+    source = """
+import os
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({
+    "base_dir": Capability.OPAQUE_STRING,
+    "filename": Capability.OPAQUE_STRING,
+})
+
+@SCHEMA.bind
+def load(config):
+    return open(os.path.join(config["base_dir"], config["filename"]))
+"""
+    [trace] = _trace_source(source)
+    assert trace.sink_hits == ()
+    [joint] = trace.joint_sink_hits
+    assert joint.fields == frozenset({"base_dir", "filename"})
+    assert joint.sink == SinkCategory.FILE_READ
+
+
+def test_string_concatenation_of_two_fields_is_a_joint_hit():
+    source = """
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({
+    "base_dir": Capability.OPAQUE_STRING,
+    "filename": Capability.OPAQUE_STRING,
+})
+
+@SCHEMA.bind
+def load(config):
+    path = config["base_dir"] + "/" + config["filename"]
+    return open(path)
+"""
+    [trace] = _trace_source(source)
+    assert trace.sink_hits == ()
+    [joint] = trace.joint_sink_hits
+    assert joint.fields == frozenset({"base_dir", "filename"})
+
+
+def test_fstring_of_two_fields_is_a_joint_hit():
+    source = '''
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({
+    "base_dir": Capability.OPAQUE_STRING,
+    "filename": Capability.OPAQUE_STRING,
+})
+
+@SCHEMA.bind
+def load(config):
+    return open(f"{config['base_dir']}/{config['filename']}")
+'''
+    [trace] = _trace_source(source)
+    assert trace.sink_hits == ()
+    [joint] = trace.joint_sink_hits
+    assert joint.fields == frozenset({"base_dir", "filename"})
+
+
+def test_joint_hit_through_variable_alias_of_compound_expression():
+    source = """
+import os
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({
+    "base_dir": Capability.OPAQUE_STRING,
+    "filename": Capability.OPAQUE_STRING,
+})
+
+@SCHEMA.bind
+def load(config):
+    full_path = os.path.join(config["base_dir"], config["filename"])
+    return open(full_path)
+"""
+    [trace] = _trace_source(source)
+    assert trace.sink_hits == ()
+    [joint] = trace.joint_sink_hits
+    assert joint.fields == frozenset({"base_dir", "filename"})
+    assert joint.sink == SinkCategory.FILE_READ
+
+
+def test_three_fields_in_one_fstring_are_all_collected():
+    source = '''
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({
+    "a": Capability.OPAQUE_STRING,
+    "b": Capability.OPAQUE_STRING,
+    "c": Capability.OPAQUE_STRING,
+})
+
+@SCHEMA.bind
+def load(config):
+    return open(f"{config['a']}/{config['b']}/{config['c']}")
+'''
+    [trace] = _trace_source(source)
+    [joint] = trace.joint_sink_hits
+    assert joint.fields == frozenset({"a", "b", "c"})
+
+
+def test_joint_hit_field_still_counts_toward_config_field_accesses():
+    # Coverage-gap detection is unaffected by joint-field composition: both
+    # fields are still recorded as accessed even though they never resolve
+    # to a single-field sink hit.
+    source = """
+import os
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({"base_dir": Capability.OPAQUE_STRING})
+
+@SCHEMA.bind
+def load(config):
+    return open(os.path.join(config["base_dir"], config["mystery"]))
+"""
+    [trace] = _trace_source(source)
+    assert trace.undeclared_fields_used == ("mystery",)
+
+
 def test_unbound_function_is_not_traced():
     source = """
 from capaudit.schema import Capability, CapabilitySchema
