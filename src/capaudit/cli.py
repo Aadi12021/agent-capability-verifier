@@ -46,6 +46,9 @@ def _run(path: Path, strict: bool) -> int:
         for mismatch in result.mismatches:
             print(f"MISMATCH  {file_path}:{mismatch.lineno}  {mismatch.describe()}")
             any_mismatch = True
+        for joint in result.joint_mismatches:
+            print(f"JOINT-MISMATCH  {file_path}:{joint.lineno}  {joint.describe()}")
+            any_mismatch = True
         for gap in result.coverage_gaps:
             print(f"COVERAGE  {file_path}  {gap.describe()}")
             any_gap = True

@@ -30,7 +30,13 @@ import ast
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 
-from capaudit.schema import Capability, CapabilitySchema, SinkCategory
+from capaudit.schema import (
+    Capability,
+    CapabilitySchema,
+    JointCapability,
+    SinkCategory,
+    UnknownFieldError,
+)
 
 # Dotted call names that are always sinks, mapped to the sink category they
 # represent. "open" is special-cased separately because its category depends
@@ -300,6 +306,77 @@ def _match_sink_hits(
     return hits, joint_hits
 
 
+def _parse_capability_attr(node: ast.AST) -> Capability | None:
+    """Match `Capability.SOME_NAME`."""
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
+            and node.value.id == "Capability":
+        try:
+            return Capability[node.attr]
+        except KeyError:
+            return None
+    return None
+
+
+def _parse_string_literal_collection(node: ast.AST) -> list[str] | None:
+    """Match a set/list/tuple literal made up entirely of string constants,
+    e.g. `{"base_dir", "filename"}`."""
+    if not isinstance(node, (ast.Set, ast.List, ast.Tuple)):
+        return None
+    values: list[str] = []
+    for elt in node.elts:
+        s = _string_constant(elt)
+        if s is None:
+            return None
+        values.append(s)
+    return values
+
+
+def _parse_joint_capability_call(node: ast.AST) -> JointCapability | None:
+    """Match `JointCapability(fields={...}, capability=Capability.X)`,
+    accepting `fields`/`capability` positionally or by keyword."""
+    if not isinstance(node, ast.Call):
+        return None
+    callee = _dotted_name(node.func)
+    if callee is None or callee.split(".")[-1] != "JointCapability":
+        return None
+
+    fields_node = node.args[0] if len(node.args) >= 1 else None
+    capability_node = node.args[1] if len(node.args) >= 2 else None
+    for kw in node.keywords:
+        if kw.arg == "fields":
+            fields_node = kw.value
+        elif kw.arg == "capability":
+            capability_node = kw.value
+    if fields_node is None or capability_node is None:
+        return None
+
+    fields = _parse_string_literal_collection(fields_node)
+    capability = _parse_capability_attr(capability_node)
+    if fields is None or capability is None:
+        return None
+    try:
+        return JointCapability(fields=frozenset(fields), capability=capability)
+    except ValueError:
+        return None
+
+
+def _parse_joint_keyword(node: ast.AST) -> list[JointCapability] | None:
+    """Match the `joint=[JointCapability(...), ...]` keyword argument.
+    Returns None (not "not present") if the list is malformed, so callers
+    can tell "no joint=" apart from "unparseable joint=" and abandon the
+    whole schema declaration in the latter case rather than silently
+    dropping rules the source actually declares."""
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return None
+    rules: list[JointCapability] = []
+    for elt in node.elts:
+        rule = _parse_joint_capability_call(elt)
+        if rule is None:
+            return None
+        rules.append(rule)
+    return rules
+
+
 def _find_schema_vars(tree: ast.Module) -> dict[str, CapabilitySchema]:
     schema_vars: dict[str, CapabilitySchema] = {}
     for node in ast.iter_child_nodes(tree):
@@ -321,18 +398,32 @@ def _find_schema_vars(tree: ast.Module) -> dict[str, CapabilitySchema]:
             if key is None:
                 ok = False
                 break
-            if not (isinstance(val_node, ast.Attribute)
-                    and isinstance(val_node.value, ast.Name)
-                    and val_node.value.id == "Capability"):
+            capability = _parse_capability_attr(val_node)
+            if capability is None:
                 ok = False
                 break
-            try:
-                fields[key] = Capability[val_node.attr]
-            except KeyError:
-                ok = False
-                break
+            fields[key] = capability
+
+        joint_rules: list[JointCapability] = []
         if ok:
-            schema_vars[node.targets[0].id] = CapabilitySchema(fields)
+            for kw in call.keywords:
+                if kw.arg != "joint":
+                    continue
+                parsed = _parse_joint_keyword(kw.value)
+                if parsed is None:
+                    ok = False
+                else:
+                    joint_rules = parsed
+                break
+
+        if ok:
+            try:
+                schema_vars[node.targets[0].id] = CapabilitySchema(fields, joint=joint_rules)
+            except (TypeError, UnknownFieldError, ValueError):
+                # A `joint=` rule that's syntactically fine but semantically
+                # invalid (e.g. references a field not in this same dict) --
+                # treat the same as any other unparseable schema.
+                pass
     return schema_vars
 
 

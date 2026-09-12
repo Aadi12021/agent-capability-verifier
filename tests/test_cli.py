@@ -52,6 +52,28 @@ def test_directory_target_aggregates_across_files(capsys):
     assert captured.out.count("MISMATCH") >= 3  # one per vulnerable example
 
 
+def test_joint_mismatch_prints_joint_mismatch_line_and_exits_1(tmp_path, capsys):
+    module = tmp_path / "joint.py"
+    module.write_text(
+        "import os\n"
+        "from capaudit.schema import Capability, CapabilitySchema\n"
+        "SCHEMA = CapabilitySchema({\n"
+        "    'base_dir': Capability.OPAQUE_STRING,\n"
+        "    'filename': Capability.OPAQUE_STRING,\n"
+        "})\n"
+        "@SCHEMA.bind\n"
+        "def load(config):\n"
+        "    return open(os.path.join(config['base_dir'], config['filename']))\n"
+    )
+    exit_code = main([str(module)])
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "JOINT-MISMATCH" in captured.out
+    assert "base_dir" in captured.out
+    assert "filename" in captured.out
+    assert "MISMATCH" not in captured.out.replace("JOINT-MISMATCH", "")
+
+
 def test_coverage_gap_alone_does_not_fail_by_default(tmp_path, capsys):
     module = tmp_path / "gap_only.py"
     module.write_text(

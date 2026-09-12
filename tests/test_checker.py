@@ -89,6 +89,76 @@ def load(config):
     assert "file_read" in text
 
 
+# --- JointMismatch: sinks reached via a combination of fields ---
+
+
+def test_joint_fields_reaching_a_sink_without_a_joint_rule_is_a_joint_mismatch():
+    source = """
+import os
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({
+    "base_dir": Capability.OPAQUE_STRING,
+    "filename": Capability.OPAQUE_STRING,
+})
+
+@SCHEMA.bind
+def load(config):
+    return open(os.path.join(config["base_dir"], config["filename"]))
+"""
+    result = check_source(source)
+    assert result.mismatches == ()  # neither field alone is ever "the" field reaching open()
+    assert result.coverage_gaps == ()  # both fields are declared, just not their combination
+    assert len(result.joint_mismatches) == 1
+    [jm] = result.joint_mismatches
+    assert jm.fields == frozenset({"base_dir", "filename"})
+    assert jm.actual_sink == SinkCategory.FILE_READ
+    assert jm.declared == {
+        "base_dir": Capability.OPAQUE_STRING,
+        "filename": Capability.OPAQUE_STRING,
+    }
+
+
+def test_declared_joint_rule_legitimizes_the_combination():
+    source = """
+import os
+from capaudit.schema import Capability, CapabilitySchema, JointCapability
+
+SCHEMA = CapabilitySchema(
+    {"base_dir": Capability.OPAQUE_STRING, "filename": Capability.OPAQUE_STRING},
+    joint=[JointCapability(fields={"base_dir", "filename"}, capability=Capability.FILE_PATH)],
+)
+
+@SCHEMA.bind
+def load(config):
+    return open(os.path.join(config["base_dir"], config["filename"]))
+"""
+    result = check_source(source)
+    assert result.mismatches == ()
+    assert result.joint_mismatches == ()
+
+
+def test_joint_mismatch_describe_is_human_readable():
+    source = """
+import os
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({
+    "base_dir": Capability.OPAQUE_STRING,
+    "filename": Capability.OPAQUE_STRING,
+})
+
+@SCHEMA.bind
+def load(config):
+    return open(os.path.join(config["base_dir"], config["filename"]))
+"""
+    [jm] = check_source(source).joint_mismatches
+    text = jm.describe()
+    assert "base_dir" in text
+    assert "filename" in text
+    assert "file_read" in text
+
+
 # --- Integration: the plan's core acceptance criterion ---
 # the checker must flag every vulnerable example and stay silent on the
 # clean one.

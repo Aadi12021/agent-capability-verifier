@@ -121,20 +121,26 @@ def test_joint_allowed_sinks_matches_exact_field_set():
     assert schema.joint_allowed_sinks(frozenset({"base_dir", "filename"})) == frozenset(
         {SinkCategory.FILE_READ, SinkCategory.FILE_WRITE}
     )
-    assert schema.is_joint_allowed(frozenset({"base_dir", "filename"}), SinkCategory.FILE_READ) is True
+    fields = frozenset({"base_dir", "filename"})
+    assert schema.is_joint_allowed(fields, SinkCategory.FILE_READ) is True
 
 
 def test_joint_allowed_sinks_empty_when_no_rule_declared():
     schema = CapabilitySchema(
         {"base_dir": Capability.OPAQUE_STRING, "filename": Capability.OPAQUE_STRING}
     )
-    assert schema.joint_allowed_sinks(frozenset({"base_dir", "filename"})) == frozenset()
-    assert schema.is_joint_allowed(frozenset({"base_dir", "filename"}), SinkCategory.FILE_READ) is False
+    fields = frozenset({"base_dir", "filename"})
+    assert schema.joint_allowed_sinks(fields) == frozenset()
+    assert schema.is_joint_allowed(fields, SinkCategory.FILE_READ) is False
 
 
 def test_joint_rule_does_not_match_a_superset_or_subset_field_combination():
     schema = CapabilitySchema(
-        {"a": Capability.OPAQUE_STRING, "b": Capability.OPAQUE_STRING, "c": Capability.OPAQUE_STRING},
+        {
+            "a": Capability.OPAQUE_STRING,
+            "b": Capability.OPAQUE_STRING,
+            "c": Capability.OPAQUE_STRING,
+        },
         joint=[JointCapability(fields={"a", "b"}, capability=Capability.FILE_PATH)],
     )
     assert schema.is_joint_allowed(frozenset({"a", "b", "c"}), SinkCategory.FILE_READ) is False

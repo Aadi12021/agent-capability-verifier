@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from capaudit.schema import SinkCategory
+from capaudit.schema import Capability, SinkCategory
 from capaudit.tracer import CapabilityTracer
 
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
@@ -345,6 +345,28 @@ def load(config):
     [trace] = _trace_source(source)
     [joint] = trace.joint_sink_hits
     assert joint.fields == frozenset({"a", "b", "c"})
+
+
+def test_schema_with_joint_keyword_is_reconstructed_with_its_joint_rules():
+    # The tracer statically reconstructs CapabilitySchema(...) from source;
+    # this checks it doesn't silently drop a `joint=` keyword argument.
+    source = """
+from capaudit.schema import Capability, CapabilitySchema, JointCapability
+
+SCHEMA = CapabilitySchema(
+    {"base_dir": Capability.OPAQUE_STRING, "filename": Capability.OPAQUE_STRING},
+    joint=[JointCapability(fields={"base_dir", "filename"}, capability=Capability.FILE_PATH)],
+)
+
+@SCHEMA.bind
+def load(config):
+    return config["base_dir"]
+"""
+    [trace] = _trace_source(source)
+    assert len(trace.schema.joint_rules) == 1
+    [rule] = trace.schema.joint_rules
+    assert rule.fields == frozenset({"base_dir", "filename"})
+    assert rule.capability == Capability.FILE_PATH
 
 
 def test_joint_hit_field_still_counts_toward_config_field_accesses():
