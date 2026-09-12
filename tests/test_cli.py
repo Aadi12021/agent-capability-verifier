@@ -50,6 +50,45 @@ def test_directory_target_aggregates_across_files(capsys):
     captured = capsys.readouterr()
     assert exit_code == 1  # the vulnerable examples in this dir must be flagged
     assert captured.out.count("MISMATCH") >= 3  # one per vulnerable example
+    assert "JOINT-MISMATCH" in captured.out  # vulnerable_loader_4_joint_path.py
+
+
+def test_vulnerable_example_4_joint_path_exits_1_and_prints_joint_mismatch(capsys):
+    exit_code = main([str(EXAMPLES_DIR / "vulnerable_loader_4_joint_path.py")])
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "JOINT-MISMATCH" in captured.out
+    assert "plugin_dir" in captured.out
+    assert "asset_name" in captured.out
+
+
+def test_clean_example_joint_path_exits_0(capsys):
+    exit_code = main([str(EXAMPLES_DIR / "clean_loader_joint_path.py")])
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "no capability mismatches found" in captured.out
+
+
+def test_joint_mismatch_prints_joint_mismatch_line_and_exits_1(tmp_path, capsys):
+    module = tmp_path / "joint.py"
+    module.write_text(
+        "import os\n"
+        "from capaudit.schema import Capability, CapabilitySchema\n"
+        "SCHEMA = CapabilitySchema({\n"
+        "    'base_dir': Capability.OPAQUE_STRING,\n"
+        "    'filename': Capability.OPAQUE_STRING,\n"
+        "})\n"
+        "@SCHEMA.bind\n"
+        "def load(config):\n"
+        "    return open(os.path.join(config['base_dir'], config['filename']))\n"
+    )
+    exit_code = main([str(module)])
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "JOINT-MISMATCH" in captured.out
+    assert "base_dir" in captured.out
+    assert "filename" in captured.out
+    assert "MISMATCH" not in captured.out.replace("JOINT-MISMATCH", "")
 
 
 def test_coverage_gap_alone_does_not_fail_by_default(tmp_path, capsys):

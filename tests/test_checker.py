@@ -89,6 +89,76 @@ def load(config):
     assert "file_read" in text
 
 
+# --- JointMismatch: sinks reached via a combination of fields ---
+
+
+def test_joint_fields_reaching_a_sink_without_a_joint_rule_is_a_joint_mismatch():
+    source = """
+import os
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({
+    "base_dir": Capability.OPAQUE_STRING,
+    "filename": Capability.OPAQUE_STRING,
+})
+
+@SCHEMA.bind
+def load(config):
+    return open(os.path.join(config["base_dir"], config["filename"]))
+"""
+    result = check_source(source)
+    assert result.mismatches == ()  # neither field alone is ever "the" field reaching open()
+    assert result.coverage_gaps == ()  # both fields are declared, just not their combination
+    assert len(result.joint_mismatches) == 1
+    [jm] = result.joint_mismatches
+    assert jm.fields == frozenset({"base_dir", "filename"})
+    assert jm.actual_sink == SinkCategory.FILE_READ
+    assert jm.declared == {
+        "base_dir": Capability.OPAQUE_STRING,
+        "filename": Capability.OPAQUE_STRING,
+    }
+
+
+def test_declared_joint_rule_legitimizes_the_combination():
+    source = """
+import os
+from capaudit.schema import Capability, CapabilitySchema, JointCapability
+
+SCHEMA = CapabilitySchema(
+    {"base_dir": Capability.OPAQUE_STRING, "filename": Capability.OPAQUE_STRING},
+    joint=[JointCapability(fields={"base_dir", "filename"}, capability=Capability.FILE_PATH)],
+)
+
+@SCHEMA.bind
+def load(config):
+    return open(os.path.join(config["base_dir"], config["filename"]))
+"""
+    result = check_source(source)
+    assert result.mismatches == ()
+    assert result.joint_mismatches == ()
+
+
+def test_joint_mismatch_describe_is_human_readable():
+    source = """
+import os
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({
+    "base_dir": Capability.OPAQUE_STRING,
+    "filename": Capability.OPAQUE_STRING,
+})
+
+@SCHEMA.bind
+def load(config):
+    return open(os.path.join(config["base_dir"], config["filename"]))
+"""
+    [jm] = check_source(source).joint_mismatches
+    text = jm.describe()
+    assert "base_dir" in text
+    assert "filename" in text
+    assert "file_read" in text
+
+
 # --- Integration: the plan's core acceptance criterion ---
 # the checker must flag every vulnerable example and stay silent on the
 # clean one.
@@ -118,3 +188,35 @@ def test_stays_silent_on_clean_example():
     result = check_file(str(EXAMPLES_DIR / "clean_loader.py"))
     assert result.mismatches == ()
     assert result.coverage_gaps == ()
+
+
+def test_flags_vulnerable_example_4_joint_path():
+    result = check_file(str(EXAMPLES_DIR / "vulnerable_loader_4_joint_path.py"))
+    assert result.mismatches == ()
+    assert result.coverage_gaps == ()
+    assert len(result.joint_mismatches) == 1
+    [jm] = result.joint_mismatches
+    assert jm.fields == frozenset({"plugin_dir", "asset_name"})
+    assert jm.actual_sink == SinkCategory.FILE_READ
+
+
+def test_stays_silent_on_clean_example_joint_path():
+    result = check_file(str(EXAMPLES_DIR / "clean_loader_joint_path.py"))
+    assert result.mismatches == ()
+    assert result.joint_mismatches == ()
+    assert result.coverage_gaps == ()
+
+
+def test_v1_single_field_view_misses_the_joint_example_but_v2_catches_it():
+    """The concrete before/after this feature adds: a consumer that only
+    ever looked at `result.mismatches` -- the entirety of what v1's checker
+    exposed -- sees nothing wrong with vulnerable_loader_4_joint_path.py.
+    `result.joint_mismatches`, added in v2, does. Same file, same checker
+    run; the only difference is which fields of CheckResult get read."""
+    result = check_file(str(EXAMPLES_DIR / "vulnerable_loader_4_joint_path.py"))
+
+    v1_view_flags_it = result.has_mismatches
+    v2_view_flags_it = result.has_mismatches or result.has_joint_mismatches
+
+    assert v1_view_flags_it is False
+    assert v2_view_flags_it is True
