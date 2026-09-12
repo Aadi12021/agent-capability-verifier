@@ -56,6 +56,19 @@ schema never declared at all, so no capability check could be performed for them
 a run by default (pass `--strict` to make them fail CI too), but they're printed so a clean run
 can't be mistaken for "every field was checked."
 
+### Cross-field (joint) reasoning
+
+Some real bugs don't come from any single field — they come from *combining* two or more fields
+that each look inert on their own. `capaudit` also traces this: when a single sink call's argument
+is built from more than one distinct config field — via string concatenation, an f-string, or
+`os.path.join(...)` — it reports which fields jointly feed that sink, and flags the combination as
+a **joint mismatch** unless the schema declares a `JointCapability` rule naming that exact
+combination (see [docs/capability-schema.md](docs/capability-schema.md#joint-compound-capabilities)).
+This catches bugs like a `base_dir` field and a `filename` field that individually look like
+harmless strings but together let a loader read an arbitrary file — a class of bug the original
+single-field-only tracer couldn't see at all, because it simply found no field attributable to a
+compound expression and stayed silent.
+
 ## Quick start
 
 ```bash
@@ -67,15 +80,16 @@ capaudit examples/
 # MISMATCH  examples/vulnerable_loader_1_path.py:30  load_record_index: field 'offset' declared numeric, but reaches file_read via open(...) at line 30
 # MISMATCH  examples/vulnerable_loader_2_template.py:27  render_welcome_message: field 'greeting_name' declared opaque_string, but reaches template_render via Template(...) at line 27
 # MISMATCH  examples/vulnerable_loader_3_subprocess.py:28  run_diagnostics: field 'log_level' declared enum, but reaches subprocess via subprocess.run(...) at line 28
+# JOINT-MISMATCH  examples/vulnerable_loader_4_joint_path.py:44  load_plugin_asset: fields 'asset_name' (opaque_string), 'plugin_dir' (opaque_string) jointly reach file_read via open(...) at line 44, and no joint capability rule covers this combination
 ```
 
 Exit code is `0` for a clean run, `1` if any mismatch is found (or, with `--strict`, if any
 coverage gap is found), `2` for a tool error (bad path, syntax error in the target file).
 
-## What this tool does NOT do (v1 scope — read this before relying on it)
+## What this tool does NOT do (scope — read this before relying on it)
 
-This is a v1, and its coverage is intentionally narrow. It is **not** a general security scanner
-and should not be treated as one. Specifically, v1:
+Its coverage is intentionally narrow. It is **not** a general security scanner and should not be
+treated as one. Specifically:
 
 - **Only analyzes Python.** No support for other languages.
 - **Is purely static (AST-based).** It does not execute any code under analysis, and it does not
@@ -84,12 +98,21 @@ and should not be treated as one. Specifically, v1:
 - **Tracks a fixed, hardcoded set of sink types** (file I/O, exec/eval, subprocess, template
   rendering, sockets). Any dangerous sink not in that list will not be detected.
 - **Does not do full interprocedural or cross-file analysis.** Flows that pass through several
-  layers of function calls, especially across module boundaries, may not be fully traced in v1.
+  layers of function calls, especially across module boundaries, may not be fully traced.
 - **Does not resolve aliasing, decorators, or metaprogramming precisely.** These can both hide
   real flows (false negatives) and produce spurious ones (false positives).
+- **Cross-field reasoning is narrow and pattern-based, not general.** It only recognizes a sink
+  argument built from string concatenation (`+`), an f-string, or `os.path.join(...)` — including
+  through one level of variable assignment of the combined result. It does **not** recognize
+  `%`-formatting, `str.format()`, `pathlib.Path(...) / ...`, or fields combined via a helper
+  function across function/module boundaries. A declared `JointCapability` rule also matches only
+  the *exact* field combination observed at a sink — a rule for `{base_dir, filename}` does not
+  cover a sink additionally fed by a third field. See
+  [docs/capability-schema.md](docs/capability-schema.md#joint-compound-capabilities) for the full
+  list of current matching/detection limits.
 - **Does not detect every bug class in the original incident.** It targets the
-  declared-vs-actual-capability mismatch specifically, not the full space of deserialization or
-  supply-chain vulnerabilities.
+  declared-vs-actual-capability mismatch specifically (single-field and joint), not the full space
+  of deserialization or supply-chain vulnerabilities.
 - **Is a linter over code you provide, not a scanner of third-party systems.** It never fetches,
   connects to, or probes anything outside the files given to it.
 
