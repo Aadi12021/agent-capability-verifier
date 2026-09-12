@@ -8,6 +8,12 @@ All notable changes to this project are documented here. Format loosely follows
 ### Added
 - Issue templates (bug report, sink/capability request) and a PR checklist template.
 
+### Verified
+- Docker sandbox (`docker/`) built and its isolation properties exercised for the first time
+  (2026-09-08): image builds, full test suite runs inside the container (`47 passed`), network
+  egress and DNS both fail from inside, container runs as non-root (uid 1000) with all Linux
+  capabilities dropped and `NoNewPrivs` set. Evidence table in `docker/README.md`.
+
 ## [0.1.0] - 2026-08-19
 
 ### Added
