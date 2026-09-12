@@ -188,3 +188,35 @@ def test_stays_silent_on_clean_example():
     result = check_file(str(EXAMPLES_DIR / "clean_loader.py"))
     assert result.mismatches == ()
     assert result.coverage_gaps == ()
+
+
+def test_flags_vulnerable_example_4_joint_path():
+    result = check_file(str(EXAMPLES_DIR / "vulnerable_loader_4_joint_path.py"))
+    assert result.mismatches == ()
+    assert result.coverage_gaps == ()
+    assert len(result.joint_mismatches) == 1
+    [jm] = result.joint_mismatches
+    assert jm.fields == frozenset({"plugin_dir", "asset_name"})
+    assert jm.actual_sink == SinkCategory.FILE_READ
+
+
+def test_stays_silent_on_clean_example_joint_path():
+    result = check_file(str(EXAMPLES_DIR / "clean_loader_joint_path.py"))
+    assert result.mismatches == ()
+    assert result.joint_mismatches == ()
+    assert result.coverage_gaps == ()
+
+
+def test_v1_single_field_view_misses_the_joint_example_but_v2_catches_it():
+    """The concrete before/after this feature adds: a consumer that only
+    ever looked at `result.mismatches` -- the entirety of what v1's checker
+    exposed -- sees nothing wrong with vulnerable_loader_4_joint_path.py.
+    `result.joint_mismatches`, added in v2, does. Same file, same checker
+    run; the only difference is which fields of CheckResult get read."""
+    result = check_file(str(EXAMPLES_DIR / "vulnerable_loader_4_joint_path.py"))
+
+    v1_view_flags_it = result.has_mismatches
+    v2_view_flags_it = result.has_mismatches or result.has_joint_mismatches
+
+    assert v1_view_flags_it is False
+    assert v2_view_flags_it is True

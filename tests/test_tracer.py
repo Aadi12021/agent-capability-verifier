@@ -427,3 +427,23 @@ def test_traces_clean_example_with_only_expected_hit():
     assert trace.sink_hits[0].field == "manifest_path"
     assert trace.sink_hits[0].sink == SinkCategory.FILE_READ
     assert trace.undeclared_fields_used == ()
+
+
+def test_traces_vulnerable_example_4_joint_path():
+    [trace] = CapabilityTracer().trace_file(
+        str(EXAMPLES_DIR / "vulnerable_loader_4_joint_path.py")
+    )
+    assert trace.function_name == "load_plugin_asset"
+    assert trace.sink_hits == ()  # neither field alone resolves to the sink
+    [joint] = trace.joint_sink_hits
+    assert joint.fields == frozenset({"plugin_dir", "asset_name"})
+    assert joint.sink == SinkCategory.FILE_READ
+
+
+def test_traces_clean_example_joint_path_with_no_findings():
+    [trace] = CapabilityTracer().trace_file(str(EXAMPLES_DIR / "clean_loader_joint_path.py"))
+    assert trace.function_name == "load_plugin_asset"
+    assert trace.sink_hits == ()
+    [joint] = trace.joint_sink_hits
+    assert joint.fields == frozenset({"plugin_dir", "asset_name"})
+    assert len(trace.schema.joint_rules) == 1
