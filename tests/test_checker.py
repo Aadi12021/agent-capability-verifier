@@ -1,7 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 from capaudit.checker import check_file, check_source
 from capaudit.schema import Capability, SinkCategory
+from capaudit.tracer import SourceTooLargeError, TraceDepthExceededError
 
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 
@@ -220,3 +223,33 @@ def test_v1_single_field_view_misses_the_joint_example_but_v2_catches_it():
 
     assert v1_view_flags_it is False
     assert v2_view_flags_it is True
+
+
+# --- Adversarial-input hardening, at the checker's public API ---
+
+
+def test_check_source_respects_a_custom_max_source_bytes():
+    with pytest.raises(SourceTooLargeError):
+        check_source("x = 1\n" * 100, max_source_bytes=50)
+
+
+def test_check_file_rejects_an_oversized_file(tmp_path):
+    module = tmp_path / "huge.py"
+    module.write_text("x = 1\n" * 1_000_000)  # ~6 MB, over the 5 MB default
+    with pytest.raises(SourceTooLargeError):
+        check_file(str(module))
+
+
+def test_check_source_surfaces_a_trace_depth_error_gracefully():
+    chain = "a" + (".b" * 500)
+    source = f"""
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({{"x": Capability.OPAQUE_STRING}})
+
+@SCHEMA.bind
+def load(config):
+    return {chain}(config["x"])
+"""
+    with pytest.raises(TraceDepthExceededError):
+        check_source(source)

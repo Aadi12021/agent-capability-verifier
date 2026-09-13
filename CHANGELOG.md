@@ -5,6 +5,24 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **Adversarial-input hardening.** `capaudit` parses source that could itself be
+  adversarial, not just the config values it checks; since it never executes that
+  source, the realistic risk is resource exhaustion, not code execution. Three limits
+  are now enforced on every file: a 5 MB max input size checked both on disk and on
+  the source string before `ast.parse()` (`SourceTooLargeError`), a 5-second wall-clock
+  timeout around `ast.parse()` itself via `SIGALRM` on POSIX (`ParseTimeoutError`), and
+  a 150-level recursion cap on the tracer's attribute-chain/expression-nesting walk
+  plus a 1000-iteration cap on its alias-resolution fixed point
+  (`TraceDepthExceededError`). All three are configurable via `CapabilityTracer`
+  constructor arguments and passthrough keyword arguments on `check_source`/
+  `check_file`, and degrade the CLI to a clear `capaudit: refusing to read/analyze ...`
+  message and exit code `2`, the same treatment as a syntax error, instead of hanging
+  or crashing. 14 new tests feed the tracer/checker/CLI deliberately pathological
+  input (very deep nesting, a genuinely huge generated file, a long reverse-ordered
+  alias chain) and confirm graceful failure. See the README's new "Robustness against
+  adversarial input" section for the exact limits and how to override them.
+
 ## [0.2.0] - 2026-09-13
 
 ### Added

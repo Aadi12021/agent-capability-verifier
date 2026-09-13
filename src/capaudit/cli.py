@@ -4,6 +4,13 @@ from pathlib import Path
 
 from capaudit import __version__
 from capaudit.checker import check_source
+from capaudit.tracer import (
+    DEFAULT_MAX_SOURCE_BYTES,
+    ParseTimeoutError,
+    SourceTooLargeError,
+    TraceDepthExceededError,
+    check_path_size,
+)
 
 _EXCLUDED_DIR_NAMES = {"__pycache__", ".git", ".venv", "venv", "node_modules"}
 
@@ -31,15 +38,26 @@ def _run(path: Path, strict: bool) -> int:
 
     for file_path in files:
         try:
+            # Reject an absurdly large file by its size on disk before
+            # reading the whole thing into memory.
+            check_path_size(str(file_path), DEFAULT_MAX_SOURCE_BYTES)
             source = file_path.read_text(encoding="utf-8")
         except OSError as e:
             print(f"capaudit: error reading {file_path}: {e}", file=sys.stderr)
+            any_error = True
+            continue
+        except SourceTooLargeError as e:
+            print(f"capaudit: refusing to read {file_path}: {e}", file=sys.stderr)
             any_error = True
             continue
         try:
             result = check_source(source, filename=str(file_path))
         except SyntaxError as e:
             print(f"capaudit: syntax error in {file_path}: {e}", file=sys.stderr)
+            any_error = True
+            continue
+        except (SourceTooLargeError, ParseTimeoutError, TraceDepthExceededError) as e:
+            print(f"capaudit: refusing to analyze {file_path}: {e}", file=sys.stderr)
             any_error = True
             continue
 

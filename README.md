@@ -84,7 +84,39 @@ capaudit examples/
 ```
 
 Exit code is `0` for a clean run, `1` if any mismatch is found (or, with `--strict`, if any
-coverage gap is found), `2` for a tool error (bad path, syntax error in the target file).
+coverage gap is found), `2` for a tool error (bad path, syntax error, or one of the adversarial-
+input limits below, in the target file).
+
+## Robustness against adversarial input
+
+`capaudit` never executes the source it analyzes (see "What this tool does" above) — but that
+source could itself be adversarial, not just the config values it's checking, and `ast.parse()`
+plus this tool's own tree-walk still have to run on it. Since nothing here executes untrusted
+code, the realistic risk is resource exhaustion, not code execution, so three defensive limits are
+built in and enforced before/during analysis of every file:
+
+- **Max input size: 5 MB.** Checked both on disk (before a file is even read into memory) and on
+  the source string itself (before `ast.parse()`), so an absurdly large file is rejected rather
+  than fully read or parsed. Raises `SourceTooLargeError`.
+- **Parse timeout: 5 seconds.** A wall-clock deadline around the `ast.parse()` call, since
+  deliberately-crafted source (e.g. extreme nesting) can make CPython's own parser pathologically
+  slow. Raises `ParseTimeoutError`. Enforced via `SIGALRM` on POSIX; on platforms or contexts
+  where that's unavailable (Windows, or a non-main thread) it falls back to an un-timed parse
+  rather than failing outright — the size and depth limits still bound the work in that case.
+  `capaudit.tracer.DEFAULT_PARSE_TIMEOUT_SECONDS` / `DEFAULT_MAX_SOURCE_BYTES` are constructor
+  arguments on `CapabilityTracer` (and passthrough keyword arguments on `check_source`/
+  `check_file`) if you need to tune them.
+- **Depth/iteration limit: 150 / 1000.** A pathologically deep attribute chain (`a.b.b.b...`) or
+  nested expression (`x + x + x + ...`) is capped at 150 levels of recursion, and the fixed-point
+  passes that resolve variable-alias chains are capped at 1000 iterations over the function body.
+  Both raise `TraceDepthExceededError` with a clear message instead of either hitting Python's own
+  `RecursionError` at an unpredictable depth or spinning for a very long time on a long enough
+  chain declared in the right (adversarial) order.
+
+All three are checked before capaudit ever executes any code from the target file (it never does
+that anyway) — they exist purely so pathological input fails fast and clearly, at the CLI (a
+`capaudit: refusing to read/analyze ...` message and exit code `2`, the same treatment as a syntax
+error) and at the Python API (a specific, catchable exception from `capaudit.tracer`).
 
 ## What this tool does NOT do (scope — read this before relying on it)
 
@@ -115,6 +147,12 @@ treated as one. Specifically:
   of deserialization or supply-chain vulnerabilities.
 - **Is a linter over code you provide, not a scanner of third-party systems.** It never fetches,
   connects to, or probes anything outside the files given to it.
+- **The adversarial-input limits above are deliberately conservative, not tuned to any specific
+  workload.** A legitimately huge generated config-loader file, an unusually slow-to-parse but
+  benign file, or a genuinely long (if pointless) alias chain would also be rejected — that's a
+  false "won't analyze" rather than a false negative, and the limits are overridable at the Python
+  API (`CapabilityTracer`/`check_source`/`check_file` constructor and keyword arguments) if you hit
+  one legitimately.
 
 Treat a clean run as "no mismatches of this specific class were found by this specific set of
 static rules," not as a general clean bill of health.
