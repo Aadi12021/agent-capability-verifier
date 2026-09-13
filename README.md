@@ -133,6 +133,16 @@ treated as one. Specifically:
   layers of function calls, especially across module boundaries, may not be fully traced.
 - **Does not resolve aliasing, decorators, or metaprogramming precisely.** These can both hide
   real flows (false negatives) and produce spurious ones (false positives).
+- **Sink-argument matching is pattern-based, not a general call-argument evaluator, and mutation
+  testing (`tests/test_mutation.py`) found real gaps in it:** a list built in its own variable
+  before being passed to a subprocess call (`args = [cmd, tainted]; subprocess.run(args)`, as
+  opposed to the literal `subprocess.run([cmd, tainted])`) is not traced; `open(file=path)` isn't
+  either, since only positional arguments to `open()` are inspected; nor is `Path(...).open()`,
+  since the Path-aware matching only recognizes `.read_text`/`.write_text`/`.read_bytes`/
+  `.write_bytes`. None of these are contrived evasions — they're ordinary refactors or equally
+  common alternate spellings — so treat "no mismatch" as "no mismatch found via a recognized
+  pattern," not proof the field never reaches a dangerous sink some other syntactically-equivalent
+  way.
 - **Cross-field reasoning is narrow and pattern-based, not general.** It only recognizes a sink
   argument built from string concatenation (`+`), an f-string, or `os.path.join(...)` — including
   through one level of variable assignment of the combined result. It does **not** recognize
