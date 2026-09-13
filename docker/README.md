@@ -38,8 +38,14 @@ The isolation properties above were exercised end to end on 2026-09-08 (image bu
 | No privilege escalation | `grep NoNewPrivs /proc/self/status` | `NoNewPrivs: 1` (seccomp filter also active: `Seccomp: 2`) |
 
 `/workspace` is owned by root (populated by build-time `COPY`) and is not writable by the
-`sandbox` user; `pytest` emits one harmless cache-write warning as a result. Re-run the checks
-above after any change to the `Dockerfile` or `docker-compose.yml`.
+`sandbox` user. The `Dockerfile` sets `RUFF_CACHE_DIR`/`MYPY_CACHE_DIR` to writable paths under
+`/tmp` so `ruff check .` and `mypy` (the exact commands CONTRIBUTING.md and CI run) work with no
+extra flags inside the sandbox; confirmed on 2026-09-13 by running both plain, then checking the
+caches actually landed in `/tmp/ruff-cache` and `/tmp/mypy-cache` rather than silently failing or
+being skipped. `pytest` has no equivalent env var and still emits one harmless cache-write warning
+for the same root-owned-`/workspace` reason — that one doesn't affect its exit code or output, so
+it's left alone. Re-run the checks above after any change to the `Dockerfile` or
+`docker-compose.yml`.
 
 ## Why `network_mode: none` instead of an allowlist
 
