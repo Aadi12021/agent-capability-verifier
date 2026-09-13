@@ -225,6 +225,95 @@ def test_v1_single_field_view_misses_the_joint_example_but_v2_catches_it():
     assert v2_view_flags_it is True
 
 
+def test_flags_vulnerable_example_5_none_field():
+    result = check_file(str(EXAMPLES_DIR / "vulnerable_loader_5_none_field.py"))
+    assert result.has_mismatches
+    assert any(m.field == "debug_dump_path" and m.declared == Capability.NONE
+               and m.actual_sink == SinkCategory.FILE_WRITE for m in result.mismatches)
+
+
+def test_flags_vulnerable_example_6_write():
+    result = check_file(str(EXAMPLES_DIR / "vulnerable_loader_6_write.py"))
+    assert result.has_mismatches
+    assert any(m.field == "report_label" and m.actual_sink == SinkCategory.FILE_WRITE
+               for m in result.mismatches)
+
+
+def test_flags_vulnerable_example_7_numeric_subprocess():
+    result = check_file(str(EXAMPLES_DIR / "vulnerable_loader_7_numeric_subprocess.py"))
+    assert result.has_mismatches
+    assert any(m.field == "worker_id" and m.declared == Capability.NUMERIC
+               and m.actual_sink == SinkCategory.SUBPROCESS for m in result.mismatches)
+
+
+def test_flags_vulnerable_example_8_enum_eval():
+    result = check_file(str(EXAMPLES_DIR / "vulnerable_loader_8_enum_eval.py"))
+    assert result.has_mismatches
+    assert any(m.field == "calculation_mode" and m.actual_sink == SinkCategory.CODE_EXEC
+               for m in result.mismatches)
+
+
+def test_flags_vulnerable_example_9_numeric_template_fstring():
+    result = check_file(str(EXAMPLES_DIR / "vulnerable_loader_9_numeric_template_fstring.py"))
+    assert result.has_mismatches
+    assert result.joint_mismatches == ()
+    assert any(m.field == "widget_id" and m.declared == Capability.NUMERIC
+               and m.actual_sink == SinkCategory.TEMPLATE_RENDER for m in result.mismatches)
+
+
+def test_flags_vulnerable_example_10_reassigned_alias():
+    result = check_file(str(EXAMPLES_DIR / "vulnerable_loader_10_reassigned_alias.py"))
+    assert result.has_mismatches
+    assert any(m.field == "backup_target" and m.actual_sink == SinkCategory.SUBPROCESS
+               for m in result.mismatches)
+
+
+def test_flags_vulnerable_example_11_conditional_branch():
+    result = check_file(str(EXAMPLES_DIR / "vulnerable_loader_11_conditional_branch.py"))
+    assert result.has_mismatches
+    assert any(m.field == "legacy_mode" and m.actual_sink == SinkCategory.TEMPLATE_RENDER
+               for m in result.mismatches)
+
+
+def test_vulnerable_example_12_helper_function_is_a_documented_known_gap():
+    """Pinned-down known limitation, not a passing test of detection: this
+    file has a real file-write mismatch that capaudit currently cannot see
+    because the sink is behind a plain helper-function call, and this
+    project does no interprocedural analysis. If this test ever starts
+    failing because the checker *does* flag it, that's good news -- update
+    this test (and the file's docstring / examples/README.md) rather than
+    treating the failure as a regression."""
+    result = check_file(str(EXAMPLES_DIR / "vulnerable_loader_12_helper_function_undetected.py"))
+    assert result.mismatches == ()
+    assert result.joint_mismatches == ()
+    assert result.coverage_gaps == ()
+
+
+def test_stays_silent_on_clean_example_command():
+    result = check_file(str(EXAMPLES_DIR / "clean_loader_command.py"))
+    assert result.mismatches == ()
+    assert result.joint_mismatches == ()
+    assert result.coverage_gaps == ()
+
+
+def test_stays_silent_on_clean_example_network():
+    result = check_file(str(EXAMPLES_DIR / "clean_loader_network.py"))
+    assert result.mismatches == ()
+    assert result.coverage_gaps == ()
+
+
+def test_stays_silent_on_clean_example_template():
+    result = check_file(str(EXAMPLES_DIR / "clean_loader_template.py"))
+    assert result.mismatches == ()
+    assert result.coverage_gaps == ()
+
+
+def test_stays_silent_on_clean_example_sanitized_path():
+    result = check_file(str(EXAMPLES_DIR / "clean_loader_sanitized_path.py"))
+    assert result.mismatches == ()
+    assert result.coverage_gaps == ()
+
+
 # --- Adversarial-input hardening, at the checker's public API ---
 
 

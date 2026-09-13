@@ -459,6 +459,118 @@ def test_traces_clean_example_joint_path_with_no_findings():
     assert len(trace.schema.joint_rules) == 1
 
 
+def test_traces_vulnerable_example_5_none_field():
+    [trace] = CapabilityTracer().trace_file(str(EXAMPLES_DIR / "vulnerable_loader_5_none_field.py"))
+    assert trace.function_name == "load_dataset_metadata"
+    fields_hit = {h.field for h in trace.sink_hits}
+    assert "debug_dump_path" in fields_hit
+    [hit] = [h for h in trace.sink_hits if h.field == "debug_dump_path"]
+    assert hit.sink == SinkCategory.FILE_WRITE
+
+
+def test_traces_vulnerable_example_6_write():
+    [trace] = CapabilityTracer().trace_file(str(EXAMPLES_DIR / "vulnerable_loader_6_write.py"))
+    assert trace.function_name == "write_report_stub"
+    [hit] = trace.sink_hits
+    assert hit.field == "report_label"
+    assert hit.sink == SinkCategory.FILE_WRITE
+
+
+def test_traces_vulnerable_example_7_numeric_subprocess():
+    [trace] = CapabilityTracer().trace_file(
+        str(EXAMPLES_DIR / "vulnerable_loader_7_numeric_subprocess.py")
+    )
+    assert trace.function_name == "spawn_worker"
+    [hit] = trace.sink_hits
+    assert hit.field == "worker_id"
+    assert hit.sink == SinkCategory.SUBPROCESS
+
+
+def test_traces_vulnerable_example_8_enum_eval():
+    [trace] = CapabilityTracer().trace_file(str(EXAMPLES_DIR / "vulnerable_loader_8_enum_eval.py"))
+    assert trace.function_name == "compute_summary"
+    [hit] = trace.sink_hits
+    assert hit.field == "calculation_mode"
+    assert hit.sink == SinkCategory.CODE_EXEC
+
+
+def test_traces_vulnerable_example_9_numeric_template_fstring():
+    [trace] = CapabilityTracer().trace_file(
+        str(EXAMPLES_DIR / "vulnerable_loader_9_numeric_template_fstring.py")
+    )
+    assert trace.function_name == "render_widget_snippet"
+    # A single field inside an f-string is a plain SinkHit, not joint.
+    assert trace.joint_sink_hits == ()
+    [hit] = trace.sink_hits
+    assert hit.field == "widget_id"
+    assert hit.sink == SinkCategory.TEMPLATE_RENDER
+
+
+def test_traces_vulnerable_example_10_reassigned_alias():
+    [trace] = CapabilityTracer().trace_file(
+        str(EXAMPLES_DIR / "vulnerable_loader_10_reassigned_alias.py")
+    )
+    assert trace.function_name == "run_backup"
+    [hit] = trace.sink_hits
+    assert hit.field == "backup_target"
+    assert hit.sink == SinkCategory.SUBPROCESS
+
+
+def test_traces_vulnerable_example_11_conditional_branch():
+    [trace] = CapabilityTracer().trace_file(
+        str(EXAMPLES_DIR / "vulnerable_loader_11_conditional_branch.py")
+    )
+    assert trace.function_name == "render_report"
+    [hit] = trace.sink_hits
+    assert hit.field == "legacy_mode"
+    assert hit.sink == SinkCategory.TEMPLATE_RENDER
+
+
+def test_traces_vulnerable_example_12_helper_function_is_a_documented_miss():
+    # Pinned-down known limitation: capaudit does no interprocedural
+    # analysis, so the real mismatch inside _write_cache_entry is invisible
+    # from the bound loader's own body.
+    [trace] = CapabilityTracer().trace_file(
+        str(EXAMPLES_DIR / "vulnerable_loader_12_helper_function_undetected.py")
+    )
+    assert trace.function_name == "cache_result"
+    assert trace.sink_hits == ()
+    assert trace.joint_sink_hits == ()
+    assert trace.undeclared_fields_used == ()
+
+
+def test_traces_clean_example_command():
+    [trace] = CapabilityTracer().trace_file(str(EXAMPLES_DIR / "clean_loader_command.py"))
+    assert trace.function_name == "run_diagnostics_command"
+    assert len(trace.sink_hits) == 1
+    assert trace.sink_hits[0].field == "diagnostics_command"
+    assert trace.sink_hits[0].sink == SinkCategory.SUBPROCESS
+
+
+def test_traces_clean_example_network():
+    [trace] = CapabilityTracer().trace_file(str(EXAMPLES_DIR / "clean_loader_network.py"))
+    assert trace.function_name == "ping_healthcheck"
+    [hit] = trace.sink_hits
+    assert hit.field == "healthcheck_url"
+    assert hit.sink == SinkCategory.NETWORK
+
+
+def test_traces_clean_example_template():
+    [trace] = CapabilityTracer().trace_file(str(EXAMPLES_DIR / "clean_loader_template.py"))
+    assert trace.function_name == "render_welcome"
+    [hit] = trace.sink_hits
+    assert hit.field == "welcome_template"
+    assert hit.sink == SinkCategory.TEMPLATE_RENDER
+
+
+def test_traces_clean_example_sanitized_path():
+    [trace] = CapabilityTracer().trace_file(str(EXAMPLES_DIR / "clean_loader_sanitized_path.py"))
+    assert trace.function_name == "load_named_config"
+    [hit] = trace.sink_hits
+    assert hit.field == "config_name"
+    assert hit.sink == SinkCategory.FILE_READ
+
+
 # --- Adversarial-input hardening ---
 #
 # These feed the tracer deliberately pathological *shapes* of input (very
