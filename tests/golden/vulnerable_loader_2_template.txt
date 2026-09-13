@@ -1,0 +1,8 @@
+MISMATCHES:
+render_welcome_message: field 'greeting_name' declared opaque_string, but reaches template_render via Template(...) at line 27
+
+JOINT MISMATCHES:
+(none)
+
+COVERAGE GAPS:
+(none)

@@ -47,6 +47,18 @@ New examples in `examples/` must be **original code you wrote**, demonstrating t
 declared-vs-actual-capability bug class — not a reproduction of any real, disclosed exploit or
 proof-of-concept. See the note at the top of `examples/README.md`.
 
+Every example needs a golden file (`tests/golden/<name>.txt`) locking in its expected checker
+output — `tests/test_golden.py` fails on any example missing one. Generate it with:
+
+```bash
+CAPAUDIT_UPDATE_GOLDENS=1 pytest tests/test_golden.py
+```
+
+then **review the diff before committing** — an unreviewed regeneration defeats the point of the
+test. The same command regenerates golden files after an intentional, reviewed behavior change to
+an existing example; an unreviewed failure here almost always means a real regression, not a golden
+file that just needs updating.
+
 ## Reporting a security issue in capaudit itself
 
 Don't open a public issue — see [SECURITY.md](SECURITY.md).

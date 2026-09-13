@@ -1,0 +1,8 @@
+MISMATCHES:
+render_report: field 'legacy_mode' declared opaque_string, but reaches template_render via Template(...) at line 36
+
+JOINT MISMATCHES:
+(none)
+
+COVERAGE GAPS:
+(none)

@@ -1,0 +1,8 @@
+MISMATCHES:
+render_widget_snippet: field 'widget_id' declared numeric, but reaches template_render via Template(...) at line 30
+
+JOINT MISMATCHES:
+(none)
+
+COVERAGE GAPS:
+(none)

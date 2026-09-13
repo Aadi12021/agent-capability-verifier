@@ -1,0 +1,8 @@
+MISMATCHES:
+(none)
+
+JOINT MISMATCHES:
+load_plugin_asset: fields 'asset_name' (opaque_string), 'plugin_dir' (opaque_string) jointly reach file_read via open(...) at line 44, and no joint capability rule covers this combination
+
+COVERAGE GAPS:
+(none)

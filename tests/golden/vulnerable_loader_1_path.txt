@@ -1,0 +1,8 @@
+MISMATCHES:
+load_record_index: field 'offset' declared numeric, but reaches file_read via open(...) at line 30
+
+JOINT MISMATCHES:
+(none)
+
+COVERAGE GAPS:
+(none)

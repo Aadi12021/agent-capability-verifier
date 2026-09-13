@@ -1,0 +1,8 @@
+MISMATCHES:
+compute_summary: field 'calculation_mode' declared enum, but reaches code_exec via eval(...) at line 28
+
+JOINT MISMATCHES:
+(none)
+
+COVERAGE GAPS:
+(none)
