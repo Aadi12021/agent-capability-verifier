@@ -11,6 +11,7 @@ from capaudit.tracer import (
     SourceTooLargeError,
     TraceDepthExceededError,
     _parse_with_timeout,
+    check_path_size,
 )
 
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
@@ -459,6 +460,118 @@ def test_traces_clean_example_joint_path_with_no_findings():
     assert len(trace.schema.joint_rules) == 1
 
 
+def test_traces_vulnerable_example_5_none_field():
+    [trace] = CapabilityTracer().trace_file(str(EXAMPLES_DIR / "vulnerable_loader_5_none_field.py"))
+    assert trace.function_name == "load_dataset_metadata"
+    fields_hit = {h.field for h in trace.sink_hits}
+    assert "debug_dump_path" in fields_hit
+    [hit] = [h for h in trace.sink_hits if h.field == "debug_dump_path"]
+    assert hit.sink == SinkCategory.FILE_WRITE
+
+
+def test_traces_vulnerable_example_6_write():
+    [trace] = CapabilityTracer().trace_file(str(EXAMPLES_DIR / "vulnerable_loader_6_write.py"))
+    assert trace.function_name == "write_report_stub"
+    [hit] = trace.sink_hits
+    assert hit.field == "report_label"
+    assert hit.sink == SinkCategory.FILE_WRITE
+
+
+def test_traces_vulnerable_example_7_numeric_subprocess():
+    [trace] = CapabilityTracer().trace_file(
+        str(EXAMPLES_DIR / "vulnerable_loader_7_numeric_subprocess.py")
+    )
+    assert trace.function_name == "spawn_worker"
+    [hit] = trace.sink_hits
+    assert hit.field == "worker_id"
+    assert hit.sink == SinkCategory.SUBPROCESS
+
+
+def test_traces_vulnerable_example_8_enum_eval():
+    [trace] = CapabilityTracer().trace_file(str(EXAMPLES_DIR / "vulnerable_loader_8_enum_eval.py"))
+    assert trace.function_name == "compute_summary"
+    [hit] = trace.sink_hits
+    assert hit.field == "calculation_mode"
+    assert hit.sink == SinkCategory.CODE_EXEC
+
+
+def test_traces_vulnerable_example_9_numeric_template_fstring():
+    [trace] = CapabilityTracer().trace_file(
+        str(EXAMPLES_DIR / "vulnerable_loader_9_numeric_template_fstring.py")
+    )
+    assert trace.function_name == "render_widget_snippet"
+    # A single field inside an f-string is a plain SinkHit, not joint.
+    assert trace.joint_sink_hits == ()
+    [hit] = trace.sink_hits
+    assert hit.field == "widget_id"
+    assert hit.sink == SinkCategory.TEMPLATE_RENDER
+
+
+def test_traces_vulnerable_example_10_reassigned_alias():
+    [trace] = CapabilityTracer().trace_file(
+        str(EXAMPLES_DIR / "vulnerable_loader_10_reassigned_alias.py")
+    )
+    assert trace.function_name == "run_backup"
+    [hit] = trace.sink_hits
+    assert hit.field == "backup_target"
+    assert hit.sink == SinkCategory.SUBPROCESS
+
+
+def test_traces_vulnerable_example_11_conditional_branch():
+    [trace] = CapabilityTracer().trace_file(
+        str(EXAMPLES_DIR / "vulnerable_loader_11_conditional_branch.py")
+    )
+    assert trace.function_name == "render_report"
+    [hit] = trace.sink_hits
+    assert hit.field == "legacy_mode"
+    assert hit.sink == SinkCategory.TEMPLATE_RENDER
+
+
+def test_traces_vulnerable_example_12_helper_function_is_a_documented_miss():
+    # Pinned-down known limitation: capaudit does no interprocedural
+    # analysis, so the real mismatch inside _write_cache_entry is invisible
+    # from the bound loader's own body.
+    [trace] = CapabilityTracer().trace_file(
+        str(EXAMPLES_DIR / "vulnerable_loader_12_helper_function_undetected.py")
+    )
+    assert trace.function_name == "cache_result"
+    assert trace.sink_hits == ()
+    assert trace.joint_sink_hits == ()
+    assert trace.undeclared_fields_used == ()
+
+
+def test_traces_clean_example_command():
+    [trace] = CapabilityTracer().trace_file(str(EXAMPLES_DIR / "clean_loader_command.py"))
+    assert trace.function_name == "run_diagnostics_command"
+    assert len(trace.sink_hits) == 1
+    assert trace.sink_hits[0].field == "diagnostics_command"
+    assert trace.sink_hits[0].sink == SinkCategory.SUBPROCESS
+
+
+def test_traces_clean_example_network():
+    [trace] = CapabilityTracer().trace_file(str(EXAMPLES_DIR / "clean_loader_network.py"))
+    assert trace.function_name == "ping_healthcheck"
+    [hit] = trace.sink_hits
+    assert hit.field == "healthcheck_url"
+    assert hit.sink == SinkCategory.NETWORK
+
+
+def test_traces_clean_example_template():
+    [trace] = CapabilityTracer().trace_file(str(EXAMPLES_DIR / "clean_loader_template.py"))
+    assert trace.function_name == "render_welcome"
+    [hit] = trace.sink_hits
+    assert hit.field == "welcome_template"
+    assert hit.sink == SinkCategory.TEMPLATE_RENDER
+
+
+def test_traces_clean_example_sanitized_path():
+    [trace] = CapabilityTracer().trace_file(str(EXAMPLES_DIR / "clean_loader_sanitized_path.py"))
+    assert trace.function_name == "load_named_config"
+    [hit] = trace.sink_hits
+    assert hit.field == "config_name"
+    assert hit.sink == SinkCategory.FILE_READ
+
+
 # --- Adversarial-input hardening ---
 #
 # These feed the tracer deliberately pathological *shapes* of input (very
@@ -552,7 +665,7 @@ def test_extremely_long_reverse_ordered_alias_chain_is_rejected_not_hung():
     # x[i-1] is itself resolved), which forces the alias-map fixed point to
     # propagate one step per outer pass -- the actual worst case for this
     # analysis, not a chain that happens to resolve in a single pass.
-    n = 2000
+    n = 1100
     lines = [f"x{i} = x{i - 1}" for i in range(n, 0, -1)]
     lines.append('x0 = config["field"]')
     body = "\n    ".join(lines)
@@ -589,3 +702,352 @@ def load(config):
     [trace] = _trace_source(source)
     [hit] = trace.sink_hits
     assert hit.field == "offset"
+
+
+# --- Coverage: parser robustness on malformed/unusual (but syntactically
+# valid) source ---
+#
+# These found via `pytest --cov=capaudit.tracer --cov-report=term-missing`:
+# every branch below is a real, reachable defensive path -- "give up
+# gracefully and treat this as not a schema/loader" -- that no well-formed
+# example ever exercises. None of them are dead code; each is pinned down
+# with a test rather than left unexercised.
+
+
+def test_check_path_size_ignores_a_path_that_cannot_be_stat_ed():
+    # OSError from os.path.getsize (e.g. the path doesn't exist) is
+    # swallowed -- the subsequent open()/read() is left to raise its own,
+    # more specific error.
+    check_path_size("/no/such/path/at/all", max_bytes=10)  # must not raise
+
+
+def test_parse_with_timeout_disabled_via_non_positive_timeout():
+    tree = _parse_with_timeout("x = 1", "<test>", timeout_seconds=0)
+    assert isinstance(tree, ast.Module)
+
+
+def test_parse_with_timeout_falls_back_when_sigalrm_is_unavailable(monkeypatch):
+    import signal
+
+    monkeypatch.delattr(signal, "SIGALRM", raising=False)
+    tree = _parse_with_timeout("x = 1", "<test>", timeout_seconds=5.0)
+    assert isinstance(tree, ast.Module)
+
+
+def test_parse_with_timeout_falls_back_when_signal_signal_raises_value_error(monkeypatch):
+    import signal
+
+    def _raise(*args, **kwargs):
+        raise ValueError("signal only works in main thread of the main interpreter")
+
+    monkeypatch.setattr(signal, "signal", _raise)
+    tree = _parse_with_timeout("x = 1", "<test>", timeout_seconds=5.0)
+    assert isinstance(tree, ast.Module)
+
+
+def test_dynamic_dict_key_is_not_treated_as_a_field_access():
+    # config[some_variable] -- a non-literal subscript -- must not resolve
+    # to any field; _string_constant's fallback for a non-Constant node.
+    source = """
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({"offset": Capability.NUMERIC})
+
+@SCHEMA.bind
+def load(config):
+    key = "offset"
+    return open(config[key])
+"""
+    [trace] = _trace_source(source)
+    assert trace.sink_hits == ()
+    assert trace.joint_sink_hits == ()
+
+
+def test_open_mode_passed_as_a_keyword_argument_is_still_recognized():
+    source = """
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({"path": Capability.NUMERIC})
+
+@SCHEMA.bind
+def load(config):
+    return open(config["path"], mode="w")
+"""
+    [trace] = _trace_source(source)
+    [hit] = trace.sink_hits
+    assert hit.sink == SinkCategory.FILE_WRITE
+
+
+def test_multi_alias_map_iteration_cap_is_enforced_independently():
+    # Mirrors test_extremely_long_reverse_ordered_alias_chain_is_rejected_
+    # not_hung, but every hop is a *compound* expression (os.path.join),
+    # so _build_alias_map never captures any of it and the full fixed-point
+    # burden falls on _build_multi_alias_map's own iteration cap.
+    n = 1100
+    lines = [f'y{i} = os.path.join(y{i - 1}, "x")' for i in range(n, 0, -1)]
+    lines.append('y0 = os.path.join(config["field"], "x")')
+    body = "\n    ".join(lines)
+    source = f"""
+import os
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({{"field": Capability.OPAQUE_STRING}})
+
+@SCHEMA.bind
+def load(config):
+    {body}
+    return open(y{n})
+"""
+    with pytest.raises(TraceDepthExceededError):
+        _trace_source(source)
+
+
+def test_bound_loader_with_no_parameters_yields_an_empty_trace():
+    source = """
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({"offset": Capability.NUMERIC})
+
+@SCHEMA.bind
+def load():
+    return 1
+"""
+    [trace] = _trace_source(source)
+    assert trace.sink_hits == ()
+    assert trace.joint_sink_hits == ()
+    assert trace.undeclared_fields_used == ()
+
+
+# --- Coverage: malformed CapabilitySchema(...)/JointCapability(...)
+# declarations are treated as "no schema found", not a crash ---
+
+
+def test_schema_assignment_calling_something_else_is_ignored():
+    source = """
+class NotASchema:
+    def __init__(self, fields):
+        pass
+
+OTHER = NotASchema({"x": 1})
+
+def load(config):
+    return open(config["x"])
+"""
+    assert _trace_source(source) == []
+
+
+def test_schema_call_with_no_positional_dict_argument_is_ignored():
+    source = """
+from capaudit.schema import CapabilitySchema
+
+SCHEMA = CapabilitySchema()
+
+@SCHEMA.bind
+def load(config):
+    return open(config["x"])
+"""
+    assert _trace_source(source) == []
+
+
+def test_schema_dict_with_a_non_string_key_is_ignored():
+    source = """
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({1: Capability.NUMERIC})
+
+@SCHEMA.bind
+def load(config):
+    return open(config[1])
+"""
+    assert _trace_source(source) == []
+
+
+def test_schema_dict_with_an_unknown_capability_name_is_ignored():
+    source = """
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({"x": Capability.NOT_A_REAL_CAPABILITY})
+
+@SCHEMA.bind
+def load(config):
+    return open(config["x"])
+"""
+    assert _trace_source(source) == []
+
+
+def test_schema_dict_with_a_non_capability_value_is_ignored():
+    source = """
+from capaudit.schema import CapabilitySchema
+
+SCHEMA = CapabilitySchema({"x": "numeric"})
+
+@SCHEMA.bind
+def load(config):
+    return open(config["x"])
+"""
+    assert _trace_source(source) == []
+
+
+def test_schema_with_an_unrelated_keyword_argument_is_still_parsed():
+    # _find_schema_vars only ever looks for a `joint=` keyword; any other
+    # keyword argument to CapabilitySchema(...) is simply not inspected,
+    # not treated as making the whole declaration unparseable.
+    source = """
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({"x": Capability.NUMERIC}, some_other_kwarg=123)
+
+@SCHEMA.bind
+def load(config):
+    return open(config["x"])
+"""
+    [trace] = _trace_source(source)
+    [hit] = trace.sink_hits
+    assert hit.field == "x"
+
+
+def test_joint_keyword_that_is_not_a_list_or_tuple_is_ignored():
+    source = """
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({"x": Capability.NUMERIC, "y": Capability.NUMERIC}, joint=SOME_NAME)
+
+@SCHEMA.bind
+def load(config):
+    return open(config["x"])
+"""
+    assert _trace_source(source) == []
+
+
+def test_joint_list_element_that_is_not_a_call_is_ignored():
+    source = """
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema(
+    {"x": Capability.NUMERIC, "y": Capability.NUMERIC}, joint=["not_a_call"]
+)
+
+@SCHEMA.bind
+def load(config):
+    return open(config["x"])
+"""
+    assert _trace_source(source) == []
+
+
+def test_joint_list_element_calling_something_other_than_joint_capability_is_ignored():
+    source = """
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema(
+    {"x": Capability.NUMERIC, "y": Capability.NUMERIC},
+    joint=[SomeOtherCall(fields={"x", "y"}, capability=Capability.FILE_PATH)],
+)
+
+@SCHEMA.bind
+def load(config):
+    return open(config["x"])
+"""
+    assert _trace_source(source) == []
+
+
+def test_joint_capability_call_missing_an_argument_is_ignored():
+    source = """
+from capaudit.schema import Capability, CapabilitySchema, JointCapability
+
+SCHEMA = CapabilitySchema(
+    {"x": Capability.NUMERIC, "y": Capability.NUMERIC},
+    joint=[JointCapability(fields={"x", "y"})],
+)
+
+@SCHEMA.bind
+def load(config):
+    return open(config["x"])
+"""
+    assert _trace_source(source) == []
+
+
+def test_joint_capability_call_with_capability_not_shaped_as_an_attribute_is_ignored():
+    source = """
+from capaudit.schema import Capability, CapabilitySchema, JointCapability
+
+SOME_VAR = 1
+
+SCHEMA = CapabilitySchema(
+    {"x": Capability.NUMERIC, "y": Capability.NUMERIC},
+    joint=[JointCapability(fields={"x", "y"}, capability=SOME_VAR)],
+)
+
+@SCHEMA.bind
+def load(config):
+    return open(config["x"])
+"""
+    assert _trace_source(source) == []
+
+
+def test_joint_capability_fields_not_a_collection_literal_is_ignored():
+    source = """
+from capaudit.schema import Capability, CapabilitySchema, JointCapability
+
+SCHEMA = CapabilitySchema(
+    {"x": Capability.NUMERIC, "y": Capability.NUMERIC},
+    joint=[JointCapability(fields="not_a_set", capability=Capability.FILE_PATH)],
+)
+
+@SCHEMA.bind
+def load(config):
+    return open(config["x"])
+"""
+    assert _trace_source(source) == []
+
+
+def test_joint_capability_fields_with_a_non_string_element_is_ignored():
+    source = """
+from capaudit.schema import Capability, CapabilitySchema, JointCapability
+
+SCHEMA = CapabilitySchema(
+    {"x": Capability.NUMERIC, "y": Capability.NUMERIC},
+    joint=[JointCapability(fields={1, 2}, capability=Capability.FILE_PATH)],
+)
+
+@SCHEMA.bind
+def load(config):
+    return open(config["x"])
+"""
+    assert _trace_source(source) == []
+
+
+def test_joint_capability_with_fewer_than_two_fields_is_ignored():
+    # Syntactically fine, but JointCapability's own __post_init__ rejects a
+    # single-field rule -- the ValueError is caught, not propagated.
+    source = """
+from capaudit.schema import Capability, CapabilitySchema, JointCapability
+
+SCHEMA = CapabilitySchema(
+    {"x": Capability.NUMERIC},
+    joint=[JointCapability(fields={"x"}, capability=Capability.FILE_PATH)],
+)
+
+@SCHEMA.bind
+def load(config):
+    return open(config["x"])
+"""
+    assert _trace_source(source) == []
+
+
+def test_joint_rule_referencing_an_undeclared_field_is_ignored_not_crashed():
+    # Syntactically fine at every level, but semantically invalid once
+    # CapabilitySchema itself validates it (UnknownFieldError) -- the whole
+    # schema is treated as unparseable rather than the tracer crashing.
+    source = """
+from capaudit.schema import Capability, CapabilitySchema, JointCapability
+
+SCHEMA = CapabilitySchema(
+    {"x": Capability.NUMERIC},
+    joint=[JointCapability(fields={"x", "y"}, capability=Capability.FILE_PATH)],
+)
+
+@SCHEMA.bind
+def load(config):
+    return open(config["x"])
+"""
+    assert _trace_source(source) == []

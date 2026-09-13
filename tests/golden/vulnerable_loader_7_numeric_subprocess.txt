@@ -1,0 +1,8 @@
+MISMATCHES:
+spawn_worker: field 'worker_id' declared numeric, but reaches subprocess via subprocess.run(...) at line 28
+
+JOINT MISMATCHES:
+(none)
+
+COVERAGE GAPS:
+(none)

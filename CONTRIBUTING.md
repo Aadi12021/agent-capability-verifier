@@ -29,6 +29,18 @@ mypy                 # type-check src/capaudit
 
 All three run in CI on every PR; a failing check blocks merge.
 
+## Checking test coverage
+
+```bash
+pytest --cov=capaudit.tracer --cov=capaudit.checker --cov-report=term-missing
+```
+
+Not run in CI (it's noticeably slower than a plain `pytest -v`, and isn't a merge gate) — a manual
+check for when you touch `tracer.py`/`checker.py`, to see whether a new branch needs a test.
+`tracer.py` and `checker.py` are both at 100% today; if a change knowingly leaves a branch
+uncovered because it's genuinely unreachable in practice, say so in the PR rather than leaving it
+silent.
+
 ## Adding a new sink or capability
 
 The sink taxonomy (`SinkCategory`) and capability vocabulary (`Capability`) live in
@@ -46,6 +58,18 @@ new dangerous call pattern for the tracer to recognize (`src/capaudit/tracer.py`
 New examples in `examples/` must be **original code you wrote**, demonstrating the general
 declared-vs-actual-capability bug class — not a reproduction of any real, disclosed exploit or
 proof-of-concept. See the note at the top of `examples/README.md`.
+
+Every example needs a golden file (`tests/golden/<name>.txt`) locking in its expected checker
+output — `tests/test_golden.py` fails on any example missing one. Generate it with:
+
+```bash
+CAPAUDIT_UPDATE_GOLDENS=1 pytest tests/test_golden.py
+```
+
+then **review the diff before committing** — an unreviewed regeneration defeats the point of the
+test. The same command regenerates golden files after an intentional, reviewed behavior change to
+an existing example; an unreviewed failure here almost always means a real regression, not a golden
+file that just needs updating.
 
 ## Reporting a security issue in capaudit itself
 

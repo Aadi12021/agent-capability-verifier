@@ -1,0 +1,8 @@
+MISMATCHES:
+write_report_stub: field 'report_label' declared opaque_string, but reaches file_write via open(...) at line 26
+
+JOINT MISMATCHES:
+(none)
+
+COVERAGE GAPS:
+(none)
