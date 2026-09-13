@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -e ".[dev]"
 # writable location instead of letting them fail on a permission error.
 ENV RUFF_CACHE_DIR=/tmp/ruff-cache
 ENV MYPY_CACHE_DIR=/tmp/mypy-cache
+ENV COVERAGE_FILE=/tmp/.coverage
 
 USER sandbox
 

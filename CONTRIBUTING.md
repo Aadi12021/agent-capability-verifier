@@ -29,6 +29,18 @@ mypy                 # type-check src/capaudit
 
 All three run in CI on every PR; a failing check blocks merge.
 
+## Checking test coverage
+
+```bash
+pytest --cov=capaudit.tracer --cov=capaudit.checker --cov-report=term-missing
+```
+
+Not run in CI (it's noticeably slower than a plain `pytest -v`, and isn't a merge gate) — a manual
+check for when you touch `tracer.py`/`checker.py`, to see whether a new branch needs a test.
+`tracer.py` and `checker.py` are both at 100% today; if a change knowingly leaves a branch
+uncovered because it's genuinely unreachable in practice, say so in the PR rather than leaving it
+silent.
+
 ## Adding a new sink or capability
 
 The sink taxonomy (`SinkCategory`) and capability vocabulary (`Capability`) live in
