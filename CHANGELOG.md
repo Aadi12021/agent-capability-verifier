@@ -5,6 +5,8 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-13
+
 ### Added
 - Issue templates (bug report, sink/capability request) and a PR checklist template.
 - **Cross-field (joint) capability reasoning.** A schema can now declare, via
@@ -21,6 +23,12 @@ All notable changes to this project are documented here. Format loosely follows
   built without `joint=` behaves exactly as before. See
   [docs/capability-schema.md](docs/capability-schema.md#joint-compound-capabilities) and
   the README's scope section for what this currently does and does not detect.
+
+### Fixed
+- `ruff check .` and `mypy`, run with no extra flags, failed inside the Docker sandbox
+  because `/workspace` is root-owned and the non-root `sandbox` user couldn't write a cache
+  there. `docker/Dockerfile` now sets `RUFF_CACHE_DIR`/`MYPY_CACHE_DIR` to writable paths
+  under `/tmp`; verified by running both tools plain and confirming the caches land there.
 
 ### Verified
 - Docker sandbox (`docker/`) built and its isolation properties exercised for the first time

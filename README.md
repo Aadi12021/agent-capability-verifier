@@ -128,9 +128,10 @@ systems you don't own or have permission to test. If you find a bug in this tool
 
 ## Status
 
-`v0.1.0` — the design described above is implemented end to end (schema, tracer, checker, CLI) and
-covered by tests, but the project is young: APIs may still change, and the scope limitations above
-are real, not boilerplate. Read them before relying on a clean run.
+`v0.2.0` — the design described above, including cross-field (joint) reasoning, is implemented end
+to end (schema, tracer, checker, CLI) and covered by tests, and the Docker sandbox's isolation
+properties have been verified. The project is still young: APIs may still change, and the scope
+limitations above are real, not boilerplate. Read them before relying on a clean run.
 
 ## Project layout
 
