@@ -287,3 +287,34 @@ def load_record_index(config: dict):
         "if this now fails, the gap was fixed -- update this test (and the "
         "mutation-testing report) rather than reverting the fix"
     )
+
+
+def test_known_gap_jinja2_environment_from_string_not_recognized_as_template_render():
+    """Found during the real-world sanity pass (running capaudit against
+    real projects), not by mutation: the Template-render sink match is a
+    literal name check for a bare `Template(...)` constructor call. Real
+    Jinja2 usage very commonly goes through an `Environment` instance
+    instead (`env.from_string(...)`, `env.get_template(...)`) --
+    cookiecutter's actual generate_file() does exactly this
+    (cookiecutter/generate.py, BSD-3) -- and none of that is recognized as
+    reaching TEMPLATE_RENDER at all, however directly a field flows into
+    it. This is a bigger gap than the others in this file: it's not an
+    unusual refactor, it's arguably the *more* common way to use Jinja2 in
+    real code than the bare `Template(...)` pattern all this project's own
+    template examples use."""
+    source = """
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({"project_slug": Capability.OPAQUE_STRING})
+
+@SCHEMA.bind
+def render_name(config: dict):
+    project_slug = config["project_slug"]
+    env = Environment()
+    tmpl = env.from_string(project_slug)
+    return tmpl.render()
+"""
+    assert not _has_mismatch(source), (
+        "if this now fails, the gap was fixed -- update this test (and the "
+        "real-world sanity pass report) rather than reverting the fix"
+    )

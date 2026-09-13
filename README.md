@@ -123,6 +123,17 @@ error) and at the Python API (a specific, catchable exception from `capaudit.tra
 Its coverage is intentionally narrow. It is **not** a general security scanner and should not be
 treated as one. Specifically:
 
+- **Requires opt-in annotation — it does not scan arbitrary code.** `capaudit` only ever analyzes a
+  loader function that's explicitly decorated `@SCHEMA.bind` for an explicitly declared
+  `CapabilitySchema(...)`. Point it at a codebase that has never adopted either of those — which is
+  every codebase that isn't this project or doesn't use `capaudit`'s API — and it will report zero
+  mismatches on every file, not because the code is clean, but because there's nothing for it to
+  recognize as a schema-bound loader in the first place. See "Real-world sanity check" below, where
+  running it against three unmodified open-source projects confirmed exactly this.
+- **Assumes a loader's config is its first parameter, accessed as `config[...]`/`config.get(...)`.**
+  A real function that takes config across several named parameters instead of one dict (common in
+  practice — see the real-world sanity check below) doesn't fit this shape at all; adopting
+  `capaudit` on it would mean restructuring the function's signature, not just adding a schema.
 - **Only analyzes Python.** No support for other languages.
 - **Is purely static (AST-based).** It does not execute any code under analysis, and it does not
   reason about runtime values — dynamic dispatch, `getattr`/`setattr` indirection, monkeypatching,
@@ -133,16 +144,19 @@ treated as one. Specifically:
   layers of function calls, especially across module boundaries, may not be fully traced.
 - **Does not resolve aliasing, decorators, or metaprogramming precisely.** These can both hide
   real flows (false negatives) and produce spurious ones (false positives).
-- **Sink-argument matching is pattern-based, not a general call-argument evaluator, and mutation
-  testing (`tests/test_mutation.py`) found real gaps in it:** a list built in its own variable
-  before being passed to a subprocess call (`args = [cmd, tainted]; subprocess.run(args)`, as
-  opposed to the literal `subprocess.run([cmd, tainted])`) is not traced; `open(file=path)` isn't
-  either, since only positional arguments to `open()` are inspected; nor is `Path(...).open()`,
-  since the Path-aware matching only recognizes `.read_text`/`.write_text`/`.read_bytes`/
-  `.write_bytes`. None of these are contrived evasions — they're ordinary refactors or equally
-  common alternate spellings — so treat "no mismatch" as "no mismatch found via a recognized
-  pattern," not proof the field never reaches a dangerous sink some other syntactically-equivalent
-  way.
+- **Sink-argument matching is pattern-based, not a general call-argument evaluator, and both
+  mutation testing and the real-world sanity check (below) found real gaps in it:** a list built in
+  its own variable before being passed to a subprocess call (`args = [cmd, tainted];
+  subprocess.run(args)`, as opposed to the literal `subprocess.run([cmd, tainted])`) is not traced;
+  `open(file=path)` isn't either, since only positional arguments to `open()` are inspected; nor is
+  `Path(...).open()`, since the Path-aware matching only recognizes `.read_text`/`.write_text`/
+  `.read_bytes`/`.write_bytes`. Template-render detection is narrower still: it only recognizes a
+  bare `Template(...)` constructor call, not the `Environment`-based usage (`env.from_string(...)`,
+  `env.get_template(...)`) that's arguably the *more* common real-world way to use Jinja2 — see
+  `tests/test_mutation.py`'s `test_known_gap_*` tests for all of these, pinned down with a working
+  example each. None of these are contrived evasions — they're ordinary refactors or equally common
+  alternate spellings — so treat "no mismatch" as "no mismatch found via a recognized pattern," not
+  proof the field never reaches a dangerous sink some other syntactically-equivalent way.
 - **Cross-field reasoning is narrow and pattern-based, not general.** It only recognizes a sink
   argument built from string concatenation (`+`), an f-string, or `os.path.join(...)` — including
   through one level of variable assignment of the combined result. It does **not** recognize
@@ -166,6 +180,43 @@ treated as one. Specifically:
 
 Treat a clean run as "no mismatches of this specific class were found by this specific set of
 static rules," not as a general clean bill of health.
+
+## Real-world sanity check
+
+`capaudit`'s own test suite only exercises code written specifically to exercise it. To check
+whether its output is reasonable on code nobody wrote for that purpose, it was run (read-only,
+no execution, no network access to anything of theirs, via a shallow git clone) against the
+unmodified public source of three small, permissively-licensed projects that do real config-driven
+data loading: [cookiecutter](https://github.com/cookiecutter/cookiecutter) (BSD-3),
+[python-dotenv](https://github.com/theskumar/python-dotenv) (BSD-3), and
+[dynaconf](https://github.com/dynaconf/dynaconf) (MIT).
+
+**Result: zero mismatches, zero coverage gaps, across all 533 files.** That's expected, not a
+clean bill of health for `capaudit` or for them — see the opt-in-annotation bullet above: none of
+the three declares a `CapabilitySchema` or uses `@SCHEMA.bind`, so there was nothing for the tracer
+to recognize as a bound loader anywhere, in any of them. This is the most important finding of the
+exercise: **capaudit is architecturally unable to produce output on a codebase that hasn't already
+adopted its API**, which is worth knowing before pointing it at anything and expecting Bandit- or
+Semgrep-style findings.
+
+Two more things came out of it:
+
+- **cookiecutter's own test fixtures produced 2 `capaudit: syntax error` tool errors** (out of
+  ~535 files) on `tests/hooks-abort-render/hooks/{pre,post}_gen_project.py` — these have a `.py`
+  extension but are actually Jinja2 template source (`{% if cookiecutter.abort_pre_gen == "yes" %}`
+  is not valid Python), so `ast.parse()` correctly rejects them. Not a bug in `capaudit`, but real,
+  if minor, noise: it walks every `*.py` file it finds with no way to know some of them are
+  templates wearing a Python extension.
+- **Neither cookiecutter's `generate_file()` nor python-dotenv's `set_key()`** — real functions
+  that do exactly the path-construction and template-rendering `capaudit` is designed to check —
+  take their config as a single first `dict` parameter; both spread it across several named
+  parameters instead. Adapting the real logic of `generate_file()` (BSD-3) into `capaudit`'s
+  expected shape to see whether checking it would produce a sensible result surfaced the
+  `Environment().from_string(...)` gap folded into the scope bullet above: the adapted example's
+  config field genuinely reaches template rendering, declared narrower than that, and `capaudit`
+  stays silent — pinned down as
+  `test_known_gap_jinja2_environment_from_string_not_recognized_as_template_render` in
+  `tests/test_mutation.py`.
 
 ## Responsible disclosure
 
