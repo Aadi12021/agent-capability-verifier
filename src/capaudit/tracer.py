@@ -22,11 +22,23 @@ one* distinct config field — via string concatenation (`+`), an f-string, or
 `os.path.join(...)`, including through one level of variable assignment of
 the combined result. These are reported separately as `JointSinkHit`s rather
 than `SinkHit`s, since they can't be attributed to any one field.
+
+Since this tracer parses source that could itself be adversarial (not just
+the config values it's checking), it applies a few defensive limits before
+and during analysis: a max input size checked before `ast.parse()`, a
+wall-clock timeout around that same call, and a bound on the recursion/
+iteration used to follow attribute chains, compound expressions, and alias
+chains. These exist purely so pathological input fails with a clear error
+instead of hanging or crashing the process — see `SourceTooLargeError`,
+`ParseTimeoutError`, and `TraceDepthExceededError` below, and the README's
+scope section for the current default limits.
 """
 
 from __future__ import annotations
 
 import ast
+import os
+import signal
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 
@@ -37,6 +49,125 @@ from capaudit.schema import (
     SinkCategory,
     UnknownFieldError,
 )
+
+# --- Adversarial-input hardening: limits and exceptions ---
+#
+# capaudit's own threat model (see the README) is that it never executes the
+# source it analyzes -- but ast.parse() and this module's own tree-walking
+# still have to run on it, and that source could be attacker-controlled.
+# Since nothing here executes untrusted code, the realistic risk is resource
+# exhaustion (an absurdly large file, a parse that's pathologically slow, an
+# expression or alias chain nested/chained deep enough to blow the Python
+# call stack or spin the fixed-point loops below for a very long time), not
+# code execution. These constants and exceptions bound that risk.
+
+DEFAULT_MAX_SOURCE_BYTES = 5_000_000
+"""No legitimate config-loader source file is anywhere near this large;
+treat anything bigger as adversarial/pathological rather than spend time
+reading or parsing it."""
+
+DEFAULT_PARSE_TIMEOUT_SECONDS = 5.0
+"""Wall-clock budget for a single ast.parse() call. Deliberately-crafted
+source (e.g. extreme nesting) can make CPython's own parser pathologically
+slow; this bounds how long capaudit will wait for it."""
+
+_MAX_DOTTED_NAME_DEPTH = 150
+"""Recursion bound for resolving a Name/Attribute chain (`a.b.c...`). Real
+code never nests this deep; this exists so a generated `a.b.b.b...` chain
+raises a clear error instead of a RecursionError at an unpredictable depth
+(which depends on however much stack the caller already used)."""
+
+_MAX_FIELD_EXPR_DEPTH = 150
+"""Recursion bound for `_resolve_fields`'s walk through nested string
+concatenation / f-string / os.path.join(...) expressions, for the same
+reason as `_MAX_DOTTED_NAME_DEPTH`."""
+
+_MAX_ALIAS_FIXED_POINT_ITERATIONS = 1000
+"""Bound on the outer `while changed` loop in `_build_alias_map` and
+`_build_multi_alias_map`. Both are fixed-point passes over the whole
+function body; a long enough chain of aliases declared in reverse
+dependency order forces one additional pass per hop, so an unbounded chain
+could otherwise make this loop run (and re-walk the whole function) an
+unbounded number of times."""
+
+
+class SourceTooLargeError(ValueError):
+    """Raised when source given to the tracer exceeds the configured size
+    limit, before any parsing is attempted."""
+
+
+class ParseTimeoutError(TimeoutError):
+    """Raised when `ast.parse()` did not finish within the configured
+    wall-clock timeout."""
+
+
+class TraceDepthExceededError(RecursionError):
+    """Raised when following a field's attribute, compound-expression, or
+    alias chain exceeds the tracer's configured depth/iteration bound -- a
+    defensive limit against pathologically nested or chained source, not
+    something a normal loader should ever hit."""
+
+
+def check_path_size(path: str, max_bytes: int) -> None:
+    """Cheap pre-read guard: reject a file that's already absurdly large on
+    disk, before reading the whole thing into memory. Used by `trace_file`
+    below and by the CLI, which reads files itself. Silently does nothing if
+    the size can't be determined (e.g. the path doesn't exist) -- the
+    subsequent read is left to raise its own, more specific error."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return
+    if size > max_bytes:
+        raise SourceTooLargeError(
+            f"{path}: {size} bytes on disk, exceeding the {max_bytes}-byte "
+            f"limit -- refusing to read it"
+        )
+
+
+def _check_source_size(source: str, filename: str, max_bytes: int) -> None:
+    size = len(source.encode("utf-8", errors="surrogateescape"))
+    if size > max_bytes:
+        raise SourceTooLargeError(
+            f"{filename}: source is {size} bytes, exceeding the "
+            f"{max_bytes}-byte limit -- refusing to parse"
+        )
+
+
+def _parse_with_timeout(
+    source: str, filename: str, timeout_seconds: float, parse_fn=None
+) -> ast.Module:
+    """Runs `ast.parse(source, filename=filename)` under a wall-clock
+    deadline on platforms that support `SIGALRM` (POSIX). Falls back to an
+    un-timed parse if that's unavailable -- a non-POSIX platform (Windows),
+    or a caller running outside the main thread of the main interpreter,
+    where `signal.signal()` itself raises -- rather than failing outright;
+    the size and depth guards elsewhere still bound the work in that case.
+
+    `parse_fn` is an injection point for tests (a fast, deterministic way to
+    simulate a slow parse without needing genuinely pathological input);
+    production callers should leave it as `None`, which resolves to
+    `ast.parse` at call time."""
+    if parse_fn is None:
+        parse_fn = ast.parse
+
+    if timeout_seconds <= 0 or not hasattr(signal, "SIGALRM"):
+        return parse_fn(source, filename=filename)
+
+    def _on_alarm(signum: int, frame: object) -> None:
+        raise ParseTimeoutError(f"parsing {filename} exceeded the {timeout_seconds}s timeout")
+
+    try:
+        previous_handler = signal.signal(signal.SIGALRM, _on_alarm)
+    except ValueError:
+        return parse_fn(source, filename=filename)
+
+    signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+    try:
+        return parse_fn(source, filename=filename)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 # Dotted call names that are always sinks, mapped to the sink category they
 # represent. "open" is special-cased separately because its category depends
@@ -98,13 +229,18 @@ class LoaderTrace:
     undeclared_fields_used: tuple[str, ...] = dataclass_field(default_factory=tuple)
 
 
-def _dotted_name(node: ast.AST) -> str | None:
+def _dotted_name(node: ast.AST, _depth: int = 0) -> str | None:
     """Resolve a Name/Attribute chain to a dotted string, e.g. "subprocess.run".
     Returns None for anything else (calls, subscripts, etc.)."""
+    if _depth > _MAX_DOTTED_NAME_DEPTH:
+        raise TraceDepthExceededError(
+            f"attribute access chain exceeds the maximum supported depth "
+            f"({_MAX_DOTTED_NAME_DEPTH})"
+        )
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
-        base = _dotted_name(node.value)
+        base = _dotted_name(node.value, _depth + 1)
         return f"{base}.{node.attr}" if base is not None else None
     return None
 
@@ -145,7 +281,15 @@ def _build_alias_map(func: ast.FunctionDef, config_param: str) -> dict[str, str]
     both resolve to field "f"."""
     alias_map: dict[str, str] = {}
     changed = True
+    iterations = 0
     while changed:
+        iterations += 1
+        if iterations > _MAX_ALIAS_FIXED_POINT_ITERATIONS:
+            raise TraceDepthExceededError(
+                f"alias resolution did not converge within "
+                f"{_MAX_ALIAS_FIXED_POINT_ITERATIONS} passes over the "
+                f"function body -- the source may be deliberately pathological"
+            )
         changed = False
         for node in ast.walk(func):
             if isinstance(node, ast.Assign) and len(node.targets) == 1 \
@@ -163,6 +307,7 @@ def _resolve_fields(
     config_param: str,
     alias_map: dict[str, str],
     multi_alias_map: dict[str, frozenset[str]],
+    _depth: int = 0,
 ) -> frozenset[str]:
     """Collect every distinct config field that feeds into `expr`. A plain
     single-field expression (already handled by `_resolve_field`) returns a
@@ -171,6 +316,12 @@ def _resolve_fields(
     reports every field it draws on. A name already known (via
     `multi_alias_map`) to alias such a compound expression resolves the same
     way. Anything else this tracer doesn't recognize contributes nothing."""
+    if _depth > _MAX_FIELD_EXPR_DEPTH:
+        raise TraceDepthExceededError(
+            f"expression nesting exceeds the maximum supported depth "
+            f"({_MAX_FIELD_EXPR_DEPTH})"
+        )
+
     single = _resolve_field(expr, config_param, alias_map)
     if single is not None:
         return frozenset({single})
@@ -179,20 +330,22 @@ def _resolve_fields(
         return multi_alias_map[expr.id]
 
     if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
-        return _resolve_fields(expr.left, config_param, alias_map, multi_alias_map) | \
-            _resolve_fields(expr.right, config_param, alias_map, multi_alias_map)
+        return _resolve_fields(expr.left, config_param, alias_map, multi_alias_map, _depth + 1) | \
+            _resolve_fields(expr.right, config_param, alias_map, multi_alias_map, _depth + 1)
 
     if isinstance(expr, ast.JoinedStr):  # f-string
         fields: set[str] = set()
         for value in expr.values:
             if isinstance(value, ast.FormattedValue):
-                fields |= _resolve_fields(value.value, config_param, alias_map, multi_alias_map)
+                fields |= _resolve_fields(
+                    value.value, config_param, alias_map, multi_alias_map, _depth + 1
+                )
         return frozenset(fields)
 
     if isinstance(expr, ast.Call) and _dotted_name(expr.func) == "os.path.join":
         fields = set()
         for arg in expr.args:
-            fields |= _resolve_fields(arg, config_param, alias_map, multi_alias_map)
+            fields |= _resolve_fields(arg, config_param, alias_map, multi_alias_map, _depth + 1)
         return frozenset(fields)
 
     return frozenset()
@@ -209,7 +362,15 @@ def _build_multi_alias_map(
     disagree about the same name."""
     multi_map: dict[str, frozenset[str]] = {}
     changed = True
+    iterations = 0
     while changed:
+        iterations += 1
+        if iterations > _MAX_ALIAS_FIXED_POINT_ITERATIONS:
+            raise TraceDepthExceededError(
+                f"joint-alias resolution did not converge within "
+                f"{_MAX_ALIAS_FIXED_POINT_ITERATIONS} passes over the "
+                f"function body -- the source may be deliberately pathological"
+            )
         changed = False
         for node in ast.walk(func):
             if isinstance(node, ast.Assign) and len(node.targets) == 1 \
@@ -444,10 +605,25 @@ def _find_bound_loaders(
 
 class CapabilityTracer:
     """Parses Python source and traces config field flows for every
-    `@SCHEMA.bind`-decorated loader function it finds."""
+    `@SCHEMA.bind`-decorated loader function it finds.
+
+    `max_source_bytes` and `parse_timeout_seconds` bound the cost of
+    analyzing adversarial source (see the module docstring); the depth/
+    iteration limits on the tree-walk itself are fixed module constants,
+    not configurable here, since they're an internal safety net rather than
+    a tuning knob."""
+
+    def __init__(
+        self,
+        max_source_bytes: int = DEFAULT_MAX_SOURCE_BYTES,
+        parse_timeout_seconds: float = DEFAULT_PARSE_TIMEOUT_SECONDS,
+    ):
+        self.max_source_bytes = max_source_bytes
+        self.parse_timeout_seconds = parse_timeout_seconds
 
     def trace_source(self, source: str, filename: str = "<module>") -> list[LoaderTrace]:
-        tree = ast.parse(source, filename=filename)
+        _check_source_size(source, filename, self.max_source_bytes)
+        tree = _parse_with_timeout(source, filename, self.parse_timeout_seconds)
         schema_vars = _find_schema_vars(tree)
         traces: list[LoaderTrace] = []
         for func, schema in _find_bound_loaders(tree, schema_vars):
@@ -482,6 +658,7 @@ class CapabilityTracer:
         return traces
 
     def trace_file(self, path: str) -> list[LoaderTrace]:
+        check_path_size(path, self.max_source_bytes)
         with open(path, encoding="utf-8") as f:
             source = f.read()
         return self.trace_source(source, filename=path)

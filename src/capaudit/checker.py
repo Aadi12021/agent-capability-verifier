@@ -24,7 +24,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from capaudit.schema import Capability, SinkCategory
-from capaudit.tracer import CapabilityTracer, LoaderTrace
+from capaudit.tracer import (
+    DEFAULT_MAX_SOURCE_BYTES,
+    DEFAULT_PARSE_TIMEOUT_SECONDS,
+    CapabilityTracer,
+    LoaderTrace,
+)
 
 
 @dataclass(frozen=True)
@@ -130,11 +135,28 @@ def _check_traces(traces: list[LoaderTrace]) -> CheckResult:
     )
 
 
-def check_source(source: str, filename: str = "<module>") -> CheckResult:
-    traces = CapabilityTracer().trace_source(source, filename=filename)
+def check_source(
+    source: str,
+    filename: str = "<module>",
+    *,
+    max_source_bytes: int = DEFAULT_MAX_SOURCE_BYTES,
+    parse_timeout_seconds: float = DEFAULT_PARSE_TIMEOUT_SECONDS,
+) -> CheckResult:
+    tracer = CapabilityTracer(
+        max_source_bytes=max_source_bytes, parse_timeout_seconds=parse_timeout_seconds
+    )
+    traces = tracer.trace_source(source, filename=filename)
     return _check_traces(traces)
 
 
-def check_file(path: str) -> CheckResult:
-    traces = CapabilityTracer().trace_file(path)
+def check_file(
+    path: str,
+    *,
+    max_source_bytes: int = DEFAULT_MAX_SOURCE_BYTES,
+    parse_timeout_seconds: float = DEFAULT_PARSE_TIMEOUT_SECONDS,
+) -> CheckResult:
+    tracer = CapabilityTracer(
+        max_source_bytes=max_source_bytes, parse_timeout_seconds=parse_timeout_seconds
+    )
+    traces = tracer.trace_file(path)
     return _check_traces(traces)

@@ -130,3 +130,15 @@ def test_syntax_error_reports_and_exits_2(tmp_path, capsys):
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "syntax error" in captured.err.lower()
+
+
+def test_absurdly_large_file_is_rejected_gracefully_not_read_in_full(tmp_path, capsys):
+    # Over the 5 MB default -- confirms the CLI degrades cleanly (a clear
+    # stderr message, exit code 2) instead of hanging or crashing on
+    # adversarial-sized input, same as it already does for a syntax error.
+    module = tmp_path / "huge.py"
+    module.write_text("x = 1\n" * 1_000_000)
+    exit_code = main([str(module)])
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "refusing to read" in captured.err.lower()

@@ -1,7 +1,17 @@
+import ast
+import time
 from pathlib import Path
 
+import pytest
+
 from capaudit.schema import Capability, SinkCategory
-from capaudit.tracer import CapabilityTracer
+from capaudit.tracer import (
+    CapabilityTracer,
+    ParseTimeoutError,
+    SourceTooLargeError,
+    TraceDepthExceededError,
+    _parse_with_timeout,
+)
 
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 
@@ -447,3 +457,135 @@ def test_traces_clean_example_joint_path_with_no_findings():
     [joint] = trace.joint_sink_hits
     assert joint.fields == frozenset({"plugin_dir", "asset_name"})
     assert len(trace.schema.joint_rules) == 1
+
+
+# --- Adversarial-input hardening ---
+#
+# These feed the tracer deliberately pathological *shapes* of input (very
+# deep nesting, a huge generated file, a long alias chain) to confirm it
+# fails with a clear, specific exception -- not a hang, not an uncontrolled
+# RecursionError/MemoryError/crash. None of this resembles a real disclosed
+# exploit; it's about capaudit's own robustness as a static-analysis tool
+# that has to parse source it doesn't control.
+
+
+def test_source_larger_than_configured_limit_is_rejected_before_parsing():
+    tracer = CapabilityTracer(max_source_bytes=100)
+    with pytest.raises(SourceTooLargeError):
+        tracer.trace_source("# " + ("x" * 200) + "\n")
+
+
+def test_source_at_or_under_the_limit_is_not_rejected():
+    tracer = CapabilityTracer(max_source_bytes=1000)
+    assert tracer.trace_source("x = 1\n") == []
+
+
+def test_a_genuinely_huge_generated_file_is_rejected_by_the_default_limit():
+    # ~6 MB of harmless, syntactically valid Python -- past the real
+    # default limit, not just a threshold lowered for this test.
+    huge_source = "x = 1\n" * 1_000_000
+    with pytest.raises(SourceTooLargeError):
+        CapabilityTracer().trace_source(huge_source)
+
+
+def test_parse_timeout_raises_when_parsing_is_too_slow():
+    def _slow_parse(source, filename=None):
+        time.sleep(0.3)
+        return ast.parse(source, filename=filename)
+
+    with pytest.raises(ParseTimeoutError):
+        _parse_with_timeout("x = 1", "<test>", timeout_seconds=0.05, parse_fn=_slow_parse)
+
+
+def test_parse_timeout_does_not_fire_for_a_fast_parse():
+    tree = _parse_with_timeout("x = 1", "<test>", timeout_seconds=5.0)
+    assert isinstance(tree, ast.Module)
+
+
+def test_capability_tracer_surfaces_a_parse_timeout(monkeypatch):
+    def _slow_parse(source, filename=None):
+        time.sleep(0.3)
+        return ast.parse(source, filename=filename)
+
+    monkeypatch.setattr("capaudit.tracer.ast.parse", _slow_parse)
+    tracer = CapabilityTracer(parse_timeout_seconds=0.05)
+    with pytest.raises(ParseTimeoutError):
+        tracer.trace_source("x = 1")
+
+
+def test_deeply_nested_attribute_chain_is_rejected_not_crashed():
+    # a.b.b.b...() -- a pathologically deep attribute-access chain as a
+    # call target, well past any real code's nesting.
+    chain = "a" + (".b" * 500)
+    source = f"""
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({{"x": Capability.OPAQUE_STRING}})
+
+@SCHEMA.bind
+def load(config):
+    return {chain}(config["x"])
+"""
+    with pytest.raises(TraceDepthExceededError):
+        CapabilityTracer().trace_source(source)
+
+
+def test_deeply_nested_string_concatenation_is_rejected_not_crashed():
+    # config["x"] + config["x"] + ... -- a left-nested BinOp chain deep
+    # enough to exceed the expression-nesting guard.
+    chain = " + ".join(['config["x"]'] * 500)
+    source = f"""
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({{"x": Capability.OPAQUE_STRING}})
+
+@SCHEMA.bind
+def load(config):
+    return open({chain})
+"""
+    with pytest.raises(TraceDepthExceededError):
+        CapabilityTracer().trace_source(source)
+
+
+def test_extremely_long_reverse_ordered_alias_chain_is_rejected_not_hung():
+    # Declared in reverse dependency order (x[i] = x[i-1] appears *before*
+    # x[i-1] is itself resolved), which forces the alias-map fixed point to
+    # propagate one step per outer pass -- the actual worst case for this
+    # analysis, not a chain that happens to resolve in a single pass.
+    n = 2000
+    lines = [f"x{i} = x{i - 1}" for i in range(n, 0, -1)]
+    lines.append('x0 = config["field"]')
+    body = "\n    ".join(lines)
+    source = f"""
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({{"field": Capability.OPAQUE_STRING}})
+
+@SCHEMA.bind
+def load(config):
+    {body}
+    return open(x{n})
+"""
+    with pytest.raises(TraceDepthExceededError):
+        CapabilityTracer().trace_source(source)
+
+
+def test_normal_short_alias_chain_is_unaffected_by_the_iteration_guard():
+    # Regression check: the guard added above must not touch ordinary,
+    # short alias chains like the ones already exercised elsewhere in this
+    # file (e.g. test_multi_hop_alias_chain_is_traced).
+    source = """
+from capaudit.schema import Capability, CapabilitySchema
+
+SCHEMA = CapabilitySchema({"offset": Capability.NUMERIC})
+
+@SCHEMA.bind
+def load(config):
+    a = config["offset"]
+    b = a
+    c = b
+    return open(c)
+"""
+    [trace] = _trace_source(source)
+    [hit] = trace.sink_hits
+    assert hit.field == "offset"
